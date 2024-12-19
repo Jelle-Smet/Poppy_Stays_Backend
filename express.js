@@ -187,5 +187,76 @@ app.post('/api/become-owner', authenticateToken, async (req, res) => {
     }
 });
 
+app.get('/api/spots', async (req, res) => {
+    try {
+        const sql = `
+        SELECT 
+            S.Spot_ID,
+            S.Spot_Name,
+            S.Spot_Description,
+            S.Spot_Price_Per_Night,
+            S.Spot_Max_Guests,
+            Ci.City_Name AS City_Name,
+            Co.Country_Name AS Country_Name,
+            Str.Street_Name AS Street_Address,
+            S.Spot_Number AS Street_Number, 
+            SC.Spot_Category_Name AS Category_Name,
+            M.Media_File_Url AS Image_URL
+        FROM spots AS S
+        INNER JOIN Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
+        INNER JOIN Spot_Category AS SC ON SC.Spot_Category_ID = SSC.Spot_Category_ID
+        INNER JOIN Country AS Co ON S.Country_ID = Co.Country_ID
+        INNER JOIN City AS Ci ON S.City_ID = Ci.City_ID
+        INNER JOIN Street AS Str ON S.Street_ID = Str.Street_ID
+        INNER JOIN Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
+        INNER JOIN Media AS M ON SM.Media_ID = M.Media_ID`;
+
+        const results = await db.getQuery(sql);
+
+        if (!results || results.length === 0) {
+            return res.status(404).json({ message: 'No spots found' });
+        }
+
+        // Group spots by ID
+        const spotsMap = new Map();
+        
+        results.forEach(row => {
+            if (!spotsMap.has(row.Spot_ID)) {
+                spotsMap.set(row.Spot_ID, {
+                    id: row.Spot_ID,
+                    name: row.Spot_Name,
+                    description: row.Spot_Description,
+                    pricePerNight: row.Spot_Price_Per_Night,
+                    maxGuests: row.Spot_Max_Guests,
+                    location: {
+                        city: row.City_Name,
+                        country: row.Country_Name,
+                        street: `${row.Street_Address} ${row.Street_Number}` // Concatenate street name and number
+                    },
+                    category: row.Category_Name, // Only 1 category
+                    images: [] // Initialize images as an array
+                });
+            }
+
+            // Add image to the images array
+            spotsMap.get(row.Spot_ID).images.push(row.Image_URL);
+        });
+
+        // Convert map to array and limit to 20 spots
+        const spots = Array.from(spotsMap.values()).slice(0, 20);
+
+        res.json({
+            message: 'Spots retrieved successfully',
+            spots: spots
+        });
+    } catch (error) {
+        console.error('Error fetching spots:', error);
+        res.status(500).json({ 
+            message: 'Error fetching spots',
+            error: error.message 
+        });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

@@ -1,3 +1,4 @@
+// db.js
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
@@ -36,4 +37,4 @@ class Database {
     }
 }
 
-module.exports = Database;
+module.exports = Database;  // Exporting the class itself, not the instance
