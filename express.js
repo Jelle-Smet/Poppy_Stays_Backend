@@ -3,6 +3,7 @@ const cors = require('cors');
 const Database = require('./classes/database');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const moment = require('moment'); // For date handling
 require('dotenv').config();
 
 const app = express();
@@ -193,13 +194,9 @@ app.get('/api/spots', async (req, res) => {
         SELECT 
             S.Spot_ID,
             S.Spot_Name,
-            S.Spot_Description,
             S.Spot_Price_Per_Night,
-            S.Spot_Max_Guests,
             Ci.City_Name AS City_Name,
             Co.Country_Name AS Country_Name,
-            Str.Street_Name AS Street_Address,
-            S.Spot_Number AS Street_Number, 
             SC.Spot_Category_Name AS Category_Name,
             M.Media_File_Url AS Image_URL
         FROM spots AS S
@@ -207,7 +204,6 @@ app.get('/api/spots', async (req, res) => {
         INNER JOIN Spot_Category AS SC ON SC.Spot_Category_ID = SSC.Spot_Category_ID
         INNER JOIN Country AS Co ON S.Country_ID = Co.Country_ID
         INNER JOIN City AS Ci ON S.City_ID = Ci.City_ID
-        INNER JOIN Street AS Str ON S.Street_ID = Str.Street_ID
         INNER JOIN Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
         INNER JOIN Media AS M ON SM.Media_ID = M.Media_ID`;
 
@@ -225,13 +221,10 @@ app.get('/api/spots', async (req, res) => {
                 spotsMap.set(row.Spot_ID, {
                     id: row.Spot_ID,
                     name: row.Spot_Name,
-                    description: row.Spot_Description,
                     pricePerNight: row.Spot_Price_Per_Night,
-                    maxGuests: row.Spot_Max_Guests,
                     location: {
                         city: row.City_Name,
-                        country: row.Country_Name,
-                        street: `${row.Street_Address} ${row.Street_Number}` // Concatenate street name and number
+                        country: row.Country_Name
                     },
                     category: row.Category_Name, // Only 1 category
                     images: [] // Initialize images as an array
@@ -258,5 +251,303 @@ app.get('/api/spots', async (req, res) => {
     }
 });
 
+// Fetch spot details
+app.get('/api/spot_details/:id', async (req, res) => {
+    const spotId = req.params.id;
+
+    try {
+        const sql = `SELECT 
+            S.Spot_ID,
+            S.Spot_Name,
+            S.Spot_Description,
+            S.Spot_Price_Per_Night,
+            S.Spot_Max_Guests,
+            S.Spot_Latitude,
+            S.Spot_Longitude,
+            S.Spot_Number,
+            O.Owner_Name AS Owner_Name,
+            M.Media_File_Url AS Image_URL,
+            SC.Spot_Category_Name AS Category_Name,
+            A.Amenity_Name AS Amenity_Name,
+            R.Review_Rating,
+            R.Review_Comment,
+            R.Review_Image,
+            R.Review_Date,
+            B.Booking_ID,
+            B.Booking_Start,
+            B.Booking_End,
+            Co.Country_Name AS Country_Name,
+            Ci.City_Name AS City_Name,
+            St.Street_Name AS Street_Name
+        FROM spots AS S
+        INNER JOIN Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
+        INNER JOIN Spot_Category AS SC ON SSC.Spot_Category_ID = SC.Spot_Category_ID
+        LEFT JOIN Spot_Amenity AS SA ON S.Spot_ID = SA.Spot_ID
+        LEFT JOIN Amenity AS A ON SA.Amenity_ID = A.Amenity_ID
+        LEFT JOIN Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
+        LEFT JOIN Media AS M ON SM.Media_ID = M.Media_ID
+        LEFT JOIN Review AS R ON R.Spot_ID = S.Spot_ID
+        LEFT JOIN Booking AS B ON B.Spot_ID = S.Spot_ID
+        INNER JOIN Country AS Co ON S.Country_ID = Co.Country_ID
+        INNER JOIN City AS Ci ON S.City_ID = Ci.City_ID
+        INNER JOIN Street AS St ON S.Street_ID = St.Street_ID
+        INNER JOIN Owner AS O ON S.Owner_ID = O.Owner_ID
+        WHERE S.Spot_ID = ?`;
+
+        const results = await db.getQuery(sql, [spotId]);
+
+        if (!results || results.length === 0) {
+            return res.status(404).json({ message: 'Spot not found' });
+        }
+
+        const spot = {
+            id: results[0].Spot_ID,
+            name: results[0].Spot_Name,
+            description: results[0].Spot_Description,
+            pricePerNight: results[0].Spot_Price_Per_Night,
+            maxGuests: results[0].Spot_Max_Guests,
+            latitude: results[0].Spot_Latitude,
+            longitude: results[0].Spot_Longitude,
+            streetNumber: results[0].Spot_Number,
+            ownerName: results[0].Owner_Name,
+            categoryName: results[0].Category_Name,
+            location: {
+                country: results[0].Country_Name,
+                city: results[0].City_Name,
+                street: results[0].Street_Name,
+            },
+            images: [],
+            amenities: [],
+            reviews: [],
+            bookings: []
+        };
+
+        // Process the results to group data into arrays
+        results.forEach(row => {
+            if (row.Image_URL && !spot.images.includes(row.Image_URL)) {
+                spot.images.push(row.Image_URL); // Add only unique images
+            }
+            if (row.Amenity_Name && !spot.amenities.includes(row.Amenity_Name)) {
+                spot.amenities.push(row.Amenity_Name); // Add only unique amenities
+            }
+            if (row.Review_Rating && !spot.reviews.some(review => review.rating === row.Review_Rating && review.comment === row.Review_Comment)) {
+                spot.reviews.push({
+                    rating: row.Review_Rating,
+                    comment: row.Review_Comment,
+                    image: row.Review_Image,
+                    date: row.Review_Date // Assuming this is already stored as is
+                });
+            }
+            if (row.Booking_ID && !spot.bookings.some(booking => booking.bookingId === row.Booking_ID)) {
+                const startDate = new Date(row.Booking_Start); // This will be in local time
+                const endDate = new Date(row.Booking_End); // This will be in local time
+
+                // Ensure the date is formatted as YYYY-MM-DD (without shifting)
+                const formattedStartDate = startDate.toLocaleDateString('en-CA'); // Using the 'en-CA' format for YYYY-MM-DD
+                const formattedEndDate = endDate.toLocaleDateString('en-CA'); // Using the 'en-CA' format for YYYY-MM-DD
+
+                spot.bookings.push({
+                    bookingId: row.Booking_ID,
+                    start: formattedStartDate, // Correct date format
+                    end: formattedEndDate      // Correct date format
+                });
+            }
+        });
+
+        res.json({ spot });
+    } catch (error) {
+        console.error('Error fetching spot details:', error);
+        res.status(500).json({
+            message: 'Error fetching spot details',
+            error: error.message
+        });
+    }
+});
+
+
+// Fetch spot availability
+app.get('/api/spot-availability/:spotId', async (req, res) => {
+    const spotId = req.params.spotId;
+    
+    try {
+        const availabilitySql = `
+            SELECT 
+                Availability_Start,
+                Availability_Stop
+            FROM availability 
+            WHERE Spot_ID = ?`;
+
+        const availabilityResult = await db.getQuery(availabilitySql, [spotId]);
+
+        if (!availabilityResult || availabilityResult.length === 0) {
+            return res.status(404).json({ 
+                message: 'No availability information found',
+                availabilityStart: null,
+                availabilityStop: null
+            });
+        }
+
+        // Return the date as is, no conversion
+        const availabilityStart = availabilityResult[0].Availability_Start;
+        const availabilityStop = availabilityResult[0].Availability_Stop;
+
+        res.json({ 
+            message: 'Spot availability retrieved',
+            availabilityStart: availabilityStart,
+            availabilityStop: availabilityStop
+        });
+    } catch (error) {
+        console.error('Error checking availability:', error);
+        res.status(500).json({ message: 'Error checking availability', error: error.message });
+    }
+});
+
+// Promo code check endpoint
+app.post('/api/check-promo', async (req, res) => {
+    const { promoCode } = req.body;
+
+    try {
+        const sql = `
+            SELECT * 
+            FROM Promotions 
+            WHERE Promotion_Code LIKE ? 
+            AND Promotion_Active = TRUE 
+            AND CURRENT_DATE BETWEEN Promotion_Start AND Promotion_End`;
+
+        const results = await db.getQuery(sql, [promoCode]);
+
+        if (!results || results.length === 0) {
+            return res.status(404).json({ message: 'Promo code not found or is inactive' });
+        }
+
+        const promotion = results[0];
+
+        res.json({
+            message: 'Promo code valid',
+            promotion: {
+                id: promotion.Promotion_ID,
+                name: promotion.Promotion_Name,
+                description: promotion.Promotion_Description,
+                start: promotion.Promotion_Start,
+                end: promotion.Promotion_End,
+                type: promotion.Promotion_Type,
+                amount: promotion.Promotion_Amount
+            }
+        });
+    } catch (error) {
+        console.error('Error checking promo code:', error);
+        res.status(500).json({
+            message: 'Error checking promo code',
+            error: error.message
+        });
+    }
+});
+
+// Create payment and booking
+app.post('/api/create-payment', authenticateToken, async (req, res) => {
+    const { paymentAmount, paymentMethod } = req.body;
+
+    try {
+        const transactionId = 'TXN' + Date.now() + Math.random().toString(36).substr(2, 9);
+
+        const paymentSql = `INSERT INTO Payment 
+            (Payment_Date, Payment_Amount, Payment_Status, Payment_Method, Payment_Transaction) 
+            VALUES (NOW(), ?, 'Paid', ?, ?)`;
+
+        const paymentResult = await db.getQuery(paymentSql, [
+            paymentAmount,
+            paymentMethod,
+            transactionId
+        ]);
+
+        res.json({ 
+            message: 'Payment created successfully',
+            paymentId: paymentResult.insertId,
+            transactionId: transactionId
+        });
+    } catch (error) {
+        console.error('Error creating payment:', error);
+        res.status(500).json({ 
+            message: 'Error creating payment',
+            error: error.message 
+        });
+    }
+});
+
+// Create booking
+app.post('/api/create-booking', authenticateToken, async (req, res) => {
+    const { 
+        spotId,
+        startDate,
+        endDate,
+        totalAmount,
+        paymentId,
+        promotionId
+    } = req.body;
+
+    try {
+        // Use the date as it is, no conversion needed
+        const startDateFormatted = startDate; // Assume the frontend sends the date in a consistent format (e.g., 'YYYY-MM-DD')
+        const endDateFormatted = endDate; // Same for end date
+
+        const bookingSql = `INSERT INTO Booking 
+            (User_ID, Spot_ID, Booking_Start, Booking_End, 
+             Booking_Status, Booking_Total, Booking_Date, 
+             Promotion_ID, Payment_ID) 
+            VALUES (?, ?, ?, ?, 'Pending', ?, NOW(), ?, ?)`;
+
+        const bookingResult = await db.getQuery(bookingSql, [
+            req.user.userId,
+            spotId,
+            startDateFormatted, // Directly use the date as it is
+            endDateFormatted,   // Same for end date
+            totalAmount,
+            promotionId || null,
+            paymentId
+        ]);
+
+        res.json({ 
+            message: 'Booking created successfully',
+            bookingId: bookingResult.insertId
+        });
+    } catch (error) {
+        console.error('Error creating booking:', error);
+        res.status(500).json({ 
+            message: 'Error creating booking',
+            error: error.message 
+        });
+    }
+});
+
+// favorite a spot
+app.post('/api/check-favorite', authenticateToken, async (req, res) => {
+    const { spotId } = req.body;
+    const userId = req.user.id; // Assuming authentication middleware adds the user ID to the request
+    
+    if (!spotId) {
+      return res.status(400).json({ message: 'Spot ID is required' });
+    }
+  
+    try {
+      // Check if the user has already favorited this spot
+      const existingFavorite = await db.query('SELECT * FROM Favorite WHERE User_ID = ? AND Spot_ID = ?', [userId, spotId]);
+  
+      if (existingFavorite.length > 0) {
+        // If already favorited, remove it
+        await db.query('DELETE FROM Favorite WHERE User_ID = ? AND Spot_ID = ?', [userId, spotId]);
+        return res.status(200).json({ message: 'Favorite removed' });
+      }
+  
+      // If not favorited, add it
+      const currentTime = new Date().toISOString().slice(0, 19).replace('T', ' '); // Get current time in YYYY-MM-DD HH:MM:SS format
+      await db.query('INSERT INTO Favorite (User_ID, Spot_ID, Favorite_Time) VALUES (?, ?, ?)', [userId, spotId, currentTime]);
+      return res.status(200).json({ message: 'Favorite added' });
+    } catch (error) {
+      console.error('Error in /api/check-favorite:', error);
+      res.status(500).json({ message: 'Server error' });
+    }
+  });
+  
+ 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
