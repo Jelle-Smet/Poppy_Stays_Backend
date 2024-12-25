@@ -519,34 +519,50 @@ app.post('/api/create-booking', authenticateToken, async (req, res) => {
     }
 });
 
-// favorite a spot
-app.post('/api/check-favorite', authenticateToken, async (req, res) => {
+// Toggle favorite
+app.post('/api/toggle-favorite', authenticateToken, async (req, res) => {
     const { spotId } = req.body;
-    const userId = req.user.id; // Assuming authentication middleware adds the user ID to the request
-    
-    if (!spotId) {
-      return res.status(400).json({ message: 'Spot ID is required' });
-    }
-  
+
     try {
-      // Check if the user has already favorited this spot
-      const existingFavorite = await db.query('SELECT * FROM Favorite WHERE User_ID = ? AND Spot_ID = ?', [userId, spotId]);
-  
-      if (existingFavorite.length > 0) {
-        // If already favorited, remove it
-        await db.query('DELETE FROM Favorite WHERE User_ID = ? AND Spot_ID = ?', [userId, spotId]);
-        return res.status(200).json({ message: 'Favorite removed' });
-      }
-  
-      // If not favorited, add it
-      const currentTime = new Date().toISOString().slice(0, 19).replace('T', ' '); // Get current time in YYYY-MM-DD HH:MM:SS format
-      await db.query('INSERT INTO Favorite (User_ID, Spot_ID, Favorite_Time) VALUES (?, ?, ?)', [userId, spotId, currentTime]);
-      return res.status(200).json({ message: 'Favorite added' });
+        // Check if the spot is already favorited by the user
+        const checkFavoriteSql = `SELECT Favorite_ID FROM Favorite 
+                                   WHERE User_ID = ? AND Spot_ID = ?`;
+        const favoriteResult = await db.getQuery(checkFavoriteSql, [
+            req.user.userId,
+            spotId
+        ]);
+
+        if (favoriteResult.length > 0) {
+            // Spot is already favorited, unfavorite it
+            const unfavoriteSql = `DELETE FROM Favorite WHERE Favorite_ID = ?`;
+            await db.getQuery(unfavoriteSql, [favoriteResult[0].Favorite_ID]);
+
+            return res.json({
+                message: 'Spot unfavorited successfully'
+            });
+        } else {
+            // Spot is not favorited, add it to favorites
+            const favoriteSql = `INSERT INTO Favorite (User_ID, Spot_ID, Favorite_Time) 
+                                 VALUES (?, ?, NOW())`;
+            const favoriteInsertResult = await db.getQuery(favoriteSql, [
+                req.user.userId,
+                spotId
+            ]);
+
+            return res.json({
+                message: 'Spot favorited successfully',
+                favoriteId: favoriteInsertResult.insertId
+            });
+        }
     } catch (error) {
-      console.error('Error in /api/check-favorite:', error);
-      res.status(500).json({ message: 'Server error' });
+        console.error('Error toggling favorite:', error);
+        res.status(500).json({
+            message: 'Error toggling favorite',
+            error: error.message
+        });
     }
-  });
+});
+
   
  
 const PORT = process.env.PORT || 3000;
