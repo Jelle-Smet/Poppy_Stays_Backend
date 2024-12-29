@@ -49,7 +49,6 @@ app.post('/api/signup', async (req, res) => {
     }
 });
 
-// Login Route: Handles user authentication
 app.post('/api/login', async (req, res) => {
     const { User_Email, User_Password } = req.body;
     
@@ -58,10 +57,12 @@ app.post('/api/login', async (req, res) => {
     }
 
     try {
-        const sql = `SELECT User_ID, User_Email, User_password, User_FN, User_LN
-                     FROM User WHERE User_Email = ? LIMIT 1`;
-        
-        // Check the query result
+        const sql = `SELECT U.User_ID, U.User_Email, U.User_password, U.User_FN, U.User_LN, O.Owner_ID
+                     FROM User as U
+                     INNER JOIN owner as O
+                     ON U.User_ID = O.User_ID
+                     WHERE U.User_Email = ? LIMIT 1`;
+
         const results = await db.getQuery(sql, [User_Email]);
         console.log('Database results:', results);  // Log to check
 
@@ -92,7 +93,6 @@ app.post('/api/login', async (req, res) => {
             { expiresIn: '1h' }
         );
 
-        // Ensure that this is the last response sent
         return res.status(200).json({
             message: 'Login successful',
             token,
@@ -100,7 +100,8 @@ app.post('/api/login', async (req, res) => {
                 id: user.User_ID,
                 email: user.User_Email,
                 firstName: user.User_FN,
-                lastName: user.User_LN
+                lastName: user.User_LN,
+                ownerId: user.Owner_ID  // Ensure this field is correct
             }
         });
     } catch (error) {
@@ -111,6 +112,7 @@ app.post('/api/login', async (req, res) => {
         });
     }
 });
+
 
 // New route to get user profile
 app.get('/api/profile', authenticateToken, async (req, res) => {
@@ -588,6 +590,32 @@ app.get('/api/categories', async (req, res) => {
     }
 });
 
+// API endpoint to fetch unique amenities
+app.get('/api/amenities', async (req, res) => {
+    try {
+      // Fetch amenities from the database
+      const amenities = await db.getQuery('SELECT Amenity_ID, Amenity_Name FROM Amenity');
+      
+      // Remove duplicates based on Amenity_Name
+      const uniqueAmenities = amenities.filter((value, index, self) =>
+        index === self.findIndex((t) => (
+          t.Amenity_Name === value.Amenity_Name
+        ))
+      );
+      
+      res.json({
+        message: 'Amenities retrieved successfully',
+        amenities: uniqueAmenities
+      });
+    } catch (error) {
+      console.error('Error fetching amenities:', error);
+      res.status(500).json({
+        message: 'Error fetching amenities',
+        error: error.message
+      });
+    }
+});
+
 // enpoint to get basic spot information based on category_ids.
 app.post('/api/spots-category', async (req, res) => {
     try {
@@ -772,8 +800,211 @@ app.post('/api/spots-owner', async (req, res) => {
     }
 });
 
+app.get('/api/spots/:id', async (req, res) => {
+    const spotId = req.params.id;
+
+    try {
+        const sql = `
+            SELECT 
+                S.Spot_ID,
+                S.Spot_Name,
+                S.Spot_Description,
+                S.Spot_Price_Per_Night,
+                S.Spot_Max_Guests,
+                SC.Spot_Category_ID AS Category_ID,
+                A.Amenity_ID AS Amenity_ID,  
+                M.Media_File_Url AS Image_URL
+            FROM spots AS S
+            INNER JOIN Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
+            INNER JOIN Spot_Category AS SC ON SSC.Spot_Category_ID = SC.Spot_Category_ID
+            LEFT JOIN Spot_Amenity AS SA ON S.Spot_ID = SA.Spot_ID
+            LEFT JOIN Amenity AS A ON SA.Amenity_ID = A.Amenity_ID
+            LEFT JOIN Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
+            LEFT JOIN Media AS M ON SM.Media_ID = M.Media_ID
+            WHERE S.Spot_ID = ?`;
+
+        const results = await db.getQuery(sql, [spotId]);
+
+        if (!results || results.length === 0) {
+            return res.status(404).json({ message: 'Spot not found' });
+        }
+
+        const spot = {
+            id: results[0].Spot_ID,
+            name: results[0].Spot_Name,
+            description: results[0].Spot_Description,
+            pricePerNight: results[0].Spot_Price_Per_Night,
+            maxGuests: results[0].Spot_Max_Guests,
+            categoryId: results[0].Category_ID,
+            amenities: [],  // Now stores Amenity_IDs
+            images: [],
+        };
+
+        // Process results for amenities (using Amenity_ID now) and images
+        results.forEach(row => {
+            if (row.Amenity_ID && !spot.amenities.includes(row.Amenity_ID)) {
+                spot.amenities.push(row.Amenity_ID);  // Push Amenity_ID instead of Amenity_Name
+            }
+            if (row.Image_URL && !spot.images.includes(row.Image_URL)) {
+                spot.images.push(row.Image_URL);
+            }
+        });
+
+        res.json(spot);
+    } catch (error) {
+        console.error('Error fetching spot details:', error);
+        res.status(500).json({ message: 'Error fetching spot details', error: error.message });
+    }
+});
 
 
- 
+// Update spots endpoint
+app.put("/api/update-spot/:spotId", authenticateToken, async (req, res) => {
+    const spotId = req.params.spotId;
+    const userId = req.user.userId; // Assuming JWT payload includes userId
+    const {
+        name,
+        description,
+        pricePerNight,
+        maxGuests,
+        categoryId,
+        amenities,
+        imageUrls,
+    } = req.body;
+
+    // Check if imageUrls is an array
+    if (!Array.isArray(imageUrls)) {
+        return res.status(400).json({ error: "Invalid image URLs provided." });
+    }
+
+    let connection; // Declare connection here
+
+    try {
+        // Log the incoming data for debugging
+        console.log('Spot ID:', spotId);
+        console.log('User ID:', userId);
+        console.log('Request Body:', req.body);  // Log the entire request body
+
+        // Get a connection from the pool
+        connection = await db.pool.getConnection();
+        await connection.beginTransaction(); // Start a transaction
+
+        // 1. Check if spot exists
+        const [spot] = await connection.query(
+            `SELECT * FROM Spots WHERE Spot_ID = ?`,
+            [spotId]
+        );
+
+        if (!spot) {
+            connection.release();
+            return res.status(404).json({ error: "Spot not found." });
+        }
+
+        // Authorization Check: Ensure the user owns the spot
+        const [spotOwner] = await connection.query(
+            `SELECT U.User_ID 
+            FROM Spots as S
+            INNER JOIN Owner as O ON O.Owner_ID = S.Owner_ID
+            INNER JOIN User AS U ON O.User_ID = U.User_ID
+            WHERE Spot_ID = ?`,
+            [spotId]
+        );
+
+        if (!spotOwner || spotOwner[0].User_ID !== userId) {  // Access the User_ID from the first result
+            connection.release();
+            return res.status(403).json({ error: "You are not authorized to update this spot." });
+        }
+
+        // 2. Check if category exists
+        const [category] = await connection.query(
+            `SELECT * FROM Spot_Category WHERE Spot_Category_ID = ?`,
+            [categoryId]
+        );
+
+        if (!category) {
+            connection.release();
+            return res.status(400).json({ error: "Invalid category ID." });
+        }
+
+        // 3. Check if amenities exist
+        for (const amenityId of amenities) {
+            const [amenity] = await connection.query(
+                `SELECT * FROM Amenity WHERE Amenity_ID = ?`,
+                [amenityId]
+            );
+            if (!amenity) {
+                connection.release();
+                return res.status(400).json({ error: `Invalid amenity ID: ${amenityId}` });
+            }
+        }
+
+        // 4. Update Spot Details
+        await connection.query(
+            `UPDATE Spots
+             SET Spot_name = ?, Spot_Description = ?, Spot_price_Per_Night = ?, Spot_Max_Guests = ?
+             WHERE Spot_ID = ?`,
+            [name, description, pricePerNight, maxGuests, spotId]
+        );
+
+        // 5. Update Spot Category
+        await connection.query(`DELETE FROM Spot_Spot_Category WHERE Spot_ID = ?`, [spotId]);
+        await connection.query(
+            `INSERT INTO Spot_Spot_Category (Spot_ID, Spot_Category_ID) VALUES (?, ?)`,
+            [spotId, categoryId]
+        );
+
+        // 6. Update Spot Amenities
+        await connection.query(`DELETE FROM Spot_Amenity WHERE Spot_ID = ?`, [spotId]);
+        for (const amenityId of amenities) {
+            // Check if Amenity_ID exists before inserting
+            const [amenity] = await connection.query(
+                `SELECT * FROM Amenity WHERE Amenity_ID = ?`,
+                [amenityId]
+            );
+            if (!amenity) {
+                return res.status(400).json({ error: `Amenity ID ${amenityId} does not exist.` });
+            }
+
+            await connection.query(
+                `INSERT INTO Spot_Amenity (Spot_ID, Amenity_ID) VALUES (?, ?)`,
+                [spotId, amenityId]
+            );
+        }
+
+        // 7. Update Spot Media
+        await connection.query(`DELETE FROM Spot_Media WHERE Spot_ID = ?`, [spotId]);
+        for (const url of imageUrls) {
+            console.log('Inserting image URL:', url);  // Log image URL
+            const [mediaResult] = await connection.query(
+                `INSERT INTO Media (media_Type, Media_File_URL, Media_Description, Media_Upload_Time)
+                 VALUES ('image', ?, NULL, NOW())`,
+                [url]
+            );
+            const mediaId = mediaResult.insertId;
+
+            await connection.query(
+                `INSERT INTO Spot_Media (Spot_ID, Media_ID) VALUES (?, ?)`,
+                [spotId, mediaId]
+            );
+        }
+
+        // Commit the transaction
+        await connection.commit();
+        connection.release();
+        res.status(200).json({ message: "Spot updated successfully!" });
+    } catch (error) {
+        if (connection) {
+            await connection.rollback();  // Rollback if there was an error
+            connection.release();
+        }
+        console.error("Error updating spot:", error.message);  // Log the error message
+        res.status(500).json({ error: `An error occurred while updating the spot: ${error.message}` });
+    }
+});
+
+
+
+
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
