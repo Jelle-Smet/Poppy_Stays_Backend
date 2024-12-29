@@ -1002,8 +1002,220 @@ app.put("/api/update-spot/:spotId", authenticateToken, async (req, res) => {
     }
 });
 
+// API endpoint to fetch unique countries
+app.get('/api/countries', async (req, res) => {
+    try {
+      // Fetch countries from the database
+      const countries = await db.getQuery('SELECT Country_ID, Country_Name FROM Country');
+      
+      // Remove duplicates based on Country_Name
+      const uniqueCountries = countries.filter((value, index, self) =>
+        index === self.findIndex((t) => (
+          t.Country_Name === value.Country_Name
+        ))
+      );
+      
+      res.json({
+        message: 'Countries retrieved successfully',
+        countries: uniqueCountries
+      });
+    } catch (error) {
+      console.error('Error fetching countries:', error);
+      res.status(500).json({
+        message: 'Error fetching countries',
+        error: error.message
+      });
+    }
+});
 
+// API endpoint to fetch unique cities
+app.get('/api/cities', async (req, res) => {
+    try {
+      // Fetch cities from the database
+      const cities = await db.getQuery('SELECT City_ID, City_Name FROM City');
+      
+      // Remove duplicates based on City_Name
+      const uniqueCities = cities.filter((value, index, self) =>
+        index === self.findIndex((t) => (
+          t.City_Name === value.City_Name
+        ))
+      );
+      
+      res.json({
+        message: 'Cities retrieved successfully',
+        cities: uniqueCities
+      });
+    } catch (error) {
+      console.error('Error fetching cities:', error);
+      res.status(500).json({
+        message: 'Error fetching cities',
+        error: error.message
+      });
+    }
+});
 
+// API endpoint to fetch unique streets
+app.get('/api/streets', async (req, res) => {
+    try {
+      // Fetch streets from the database
+      const streets = await db.getQuery('SELECT Street_ID, Street_Name FROM Street');
+      
+      // Remove duplicates based on Street_Name
+      const uniqueStreets = streets.filter((value, index, self) =>
+        index === self.findIndex((t) => (
+          t.Street_Name === value.Street_Name
+        ))
+      );
+      
+      res.json({
+        message: 'Streets retrieved successfully',
+        streets: uniqueStreets
+      });
+    } catch (error) {
+      console.error('Error fetching streets:', error);
+      res.status(500).json({
+        message: 'Error fetching streets',
+        error: error.message
+      });
+    }
+});
+
+// Add Spot Endpoint
+app.post("/api/add-spot", authenticateToken, async (req, res) => {
+    const {
+        name,
+        description,
+        pricePerNight,
+        maxGuests,
+        categoryId,
+        amenities,
+        imageUrls,
+        cityId,
+        streetId,
+        countryId,
+        startDate,  // Added for availability
+        endDate,    // Added for availability
+        ownerId,     // Added for owner
+        houseNumber,
+        latitude,
+        longitude,
+    } = req.body;
+
+    // Check if imageUrls is an array
+    if (!Array.isArray(imageUrls)) {
+        return res.status(400).json({ error: "Invalid image URLs provided." });
+    }
+
+    let connection;
+
+    try {
+        // Log the incoming data for debugging
+        console.log("Owner ID:", ownerId);
+        console.log("Request Body:", req.body);
+
+        // Get a connection from the pool
+        connection = await db.pool.getConnection();
+        await connection.beginTransaction(); // Start a transaction
+
+        // 1. Validate Spot Category
+        const [category] = await connection.query(
+            `SELECT * FROM Spot_Category WHERE Spot_Category_ID = ?`,
+            [categoryId]
+        );
+        if (!category) {
+            connection.release();
+            return res.status(400).json({ error: "Invalid category ID." });
+        }
+
+        // 2. Validate Amenities
+        for (const amenityId of amenities) {
+            const [amenity] = await connection.query(
+                `SELECT * FROM Amenity WHERE Amenity_ID = ?`,
+                [amenityId]
+            );
+            if (!amenity) {
+                connection.release();
+                return res.status(400).json({ error: `Invalid amenity ID: ${amenityId}` });
+            }
+        }
+
+        // 3. Validate Location (City, Country)
+        const [city] = await connection.query(
+            `SELECT * FROM City WHERE City_ID = ?`,
+            [cityId]
+        );
+        if (!city) {
+            connection.release();
+            return res.status(400).json({ error: "Invalid city ID." });
+        }
+
+        const [country] = await connection.query(
+            `SELECT * FROM Country WHERE Country_ID = ?`,
+            [countryId]
+        );
+        if (!country) {
+            connection.release();
+            return res.status(400).json({ error: "Invalid country ID." });
+        }
+
+        // 4. Insert Spot Details
+        const [spotResult] = await connection.query(
+            `INSERT INTO Spots (Spot_Name, Spot_Description, Country_ID, City_ID, Street_ID, Spot_Number, Spot_Latitude, Spot_Longitude, Spot_Price_Per_Night, Spot_Max_Guests, Owner_ID)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [name, description, countryId, cityId, streetId, houseNumber, latitude, longitude, pricePerNight, maxGuests, ownerId]
+        );
+
+        const spotId = spotResult.insertId; // Get the newly created Spot ID
+
+        // 5. Insert Spot Category
+        await connection.query(
+            `INSERT INTO Spot_Spot_Category (Spot_ID, Spot_Category_ID) VALUES (?, ?)`,
+            [spotId, categoryId]
+        );
+
+        // 6. Insert Spot Amenities
+        for (const amenityId of amenities) {
+            await connection.query(
+                `INSERT INTO Spot_Amenity (Spot_ID, Amenity_ID) VALUES (?, ?)`,
+                [spotId, amenityId]
+            );
+        }
+
+        // 7. Insert Spot Media
+        for (const url of imageUrls) {
+            const [mediaResult] = await connection.query(
+                `INSERT INTO Media (media_Type, Media_File_URL, Media_Description, Media_Upload_Time)
+                 VALUES ('image', ?, NULL, NOW())`,
+                [url]
+            );
+            const mediaId = mediaResult.insertId;
+
+            await connection.query(
+                `INSERT INTO Spot_Media (Spot_ID, Media_ID) VALUES (?, ?)`,
+                [spotId, mediaId]
+            );
+        }
+
+        // 8. Insert Availability with corrected column names
+        const [availabilityResult] = await connection.query(
+            `INSERT INTO Availability (Spot_ID, Availability_Start, Availability_Stop)
+             VALUES (?, ?, ?)`,
+            [spotId, startDate, endDate]
+        );
+
+        // Commit the transaction
+        await connection.commit();
+        connection.release();
+        res.status(201).json({ message: "Spot added successfully!", spotId });
+    } catch (error) {
+        if (connection) {
+            await connection.rollback(); // Rollback if there was an error
+            connection.release();
+        }
+        console.error("Error adding spot:", error.message); // Log the error message
+        res.status(500).json({ error: `An error occurred while adding the spot: ${error.message}` });
+    }
+});
 
 
 const PORT = process.env.PORT || 3000;
