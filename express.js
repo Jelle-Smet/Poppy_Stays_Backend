@@ -1217,6 +1217,66 @@ app.post("/api/add-spot", authenticateToken, async (req, res) => {
     }
 });
 
+// endpoint to delete a spot.
+app.delete("/api/delete-spot", authenticateToken, async (req, res) => {
+    const { spotId } = req.body;
+    let connection;
+
+    try {
+        connection = await db.pool.getConnection();
+        await connection.beginTransaction();
+
+        // Get Payment_IDs from Booking table
+        const [bookingRecords] = await connection.query(
+            `SELECT Payment_ID FROM Booking WHERE Spot_ID = ?`,
+            [spotId]
+        );
+
+        // Delete related payments
+        for (const record of bookingRecords) {
+            await connection.query(
+                `DELETE FROM Payment WHERE Payment_ID = ?`,
+                [record.Payment_ID]
+            );
+        }
+
+        // Delete bookings
+        await connection.query(
+            `DELETE FROM Booking WHERE Spot_ID = ?`,
+            [spotId]
+        );
+
+        // Original deletion logic
+        await connection.query(`DELETE FROM Availability WHERE Spot_ID = ?`, [spotId]);
+
+        const [mediaRecords] = await connection.query(
+            `SELECT Media_ID FROM Spot_Media WHERE Spot_ID = ?`,
+            [spotId]
+        );
+        
+        await connection.query(`DELETE FROM Spot_Media WHERE Spot_ID = ?`, [spotId]);
+
+        for (const record of mediaRecords) {
+            await connection.query(`DELETE FROM Media WHERE Media_ID = ?`, [record.Media_ID]);
+        }
+
+        await connection.query(`DELETE FROM Spot_Amenity WHERE Spot_ID = ?`, [spotId]);
+        await connection.query(`DELETE FROM Spot_Spot_Category WHERE Spot_ID = ?`, [spotId]);
+        await connection.query(`DELETE FROM Spots WHERE Spot_ID = ?`, [spotId]);
+
+        await connection.commit();
+        connection.release();
+        res.status(200).json({ message: "Spot deleted successfully" });
+
+    } catch (error) {
+        if (connection) {
+            await connection.rollback();
+            connection.release();
+        }
+        res.status(500).json({ error: `Error deleting spot: ${error.message}` });
+    }
+});
+
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
