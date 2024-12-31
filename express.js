@@ -258,50 +258,55 @@ app.get('/api/spot_details/:id', async (req, res) => {
     const spotId = req.params.id;
 
     try {
-        const sql = `SELECT 
-            S.Spot_ID,
-            S.Spot_Name,
-            S.Spot_Description,
-            S.Spot_Price_Per_Night,
-            S.Spot_Max_Guests,
-            S.Spot_Latitude,
-            S.Spot_Longitude,
-            S.Spot_Number,
-            O.Owner_Name AS Owner_Name,
-            M.Media_File_Url AS Image_URL,
-            SC.Spot_Category_Name AS Category_Name,
-            A.Amenity_Name AS Amenity_Name,
-            R.Review_Rating,
-            R.Review_Comment,
-            R.Review_Image,
-            R.Review_Date,
-            B.Booking_ID,
-            B.Booking_Start,
-            B.Booking_End,
-            Co.Country_Name AS Country_Name,
-            Ci.City_Name AS City_Name,
-            St.Street_Name AS Street_Name
-        FROM spots AS S
-        INNER JOIN Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
-        INNER JOIN Spot_Category AS SC ON SSC.Spot_Category_ID = SC.Spot_Category_ID
-        LEFT JOIN Spot_Amenity AS SA ON S.Spot_ID = SA.Spot_ID
-        LEFT JOIN Amenity AS A ON SA.Amenity_ID = A.Amenity_ID
-        LEFT JOIN Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
-        LEFT JOIN Media AS M ON SM.Media_ID = M.Media_ID
-        LEFT JOIN Review AS R ON R.Spot_ID = S.Spot_ID
-        LEFT JOIN Booking AS B ON B.Spot_ID = S.Spot_ID
-        INNER JOIN Country AS Co ON S.Country_ID = Co.Country_ID
-        INNER JOIN City AS Ci ON S.City_ID = Ci.City_ID
-        INNER JOIN Street AS St ON S.Street_ID = St.Street_ID
-        INNER JOIN Owner AS O ON S.Owner_ID = O.Owner_ID
-        WHERE S.Spot_ID = ?`;
+        // SQL query to get spot details, including bookings not cancelled
+        const sql = `
+            SELECT 
+                S.Spot_ID,
+                S.Spot_Name,
+                S.Spot_Description,
+                S.Spot_Price_Per_Night,
+                S.Spot_Max_Guests,
+                S.Spot_Latitude,
+                S.Spot_Longitude,
+                S.Spot_Number,
+                O.Owner_Name AS Owner_Name,
+                M.Media_File_Url AS Image_URL,
+                SC.Spot_Category_Name AS Category_Name,
+                A.Amenity_Name AS Amenity_Name,
+                R.Review_Rating,
+                R.Review_Comment,
+                R.Review_Image,
+                R.Review_Date,
+                B.Booking_ID,
+                B.Booking_Start,
+                B.Booking_End,
+                Co.Country_Name AS Country_Name,
+                Ci.City_Name AS City_Name,
+                St.Street_Name AS Street_Name
+            FROM spots AS S
+            INNER JOIN Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
+            INNER JOIN Spot_Category AS SC ON SSC.Spot_Category_ID = SC.Spot_Category_ID
+            LEFT JOIN Spot_Amenity AS SA ON S.Spot_ID = SA.Spot_ID
+            LEFT JOIN Amenity AS A ON SA.Amenity_ID = A.Amenity_ID
+            LEFT JOIN Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
+            LEFT JOIN Media AS M ON SM.Media_ID = M.Media_ID
+            LEFT JOIN Review AS R ON R.Spot_ID = S.Spot_ID
+            LEFT JOIN Booking AS B ON B.Spot_ID = S.Spot_ID
+            LEFT JOIN Country AS Co ON S.Country_ID = Co.Country_ID
+            LEFT JOIN City AS Ci ON S.City_ID = Ci.City_ID
+            LEFT JOIN Street AS St ON S.Street_ID = St.Street_ID
+            LEFT JOIN Owner AS O ON S.Owner_ID = O.Owner_ID
+            LEFT JOIN Cancellation AS C ON B.Booking_ID = C.Booking_ID
+            WHERE S.Spot_ID = ? AND C.Booking_ID IS NULL`; // Exclude canceled bookings
 
+        // Execute query to fetch the spot details
         const results = await db.getQuery(sql, [spotId]);
-
+        console.log(results);  // Log the raw results
         if (!results || results.length === 0) {
             return res.status(404).json({ message: 'Spot not found' });
         }
 
+        // Prepare the spot object
         const spot = {
             id: results[0].Spot_ID,
             name: results[0].Spot_Name,
@@ -327,27 +332,33 @@ app.get('/api/spot_details/:id', async (req, res) => {
         // Process the results to group data into arrays
         results.forEach(row => {
             if (row.Image_URL && !spot.images.includes(row.Image_URL)) {
-                spot.images.push(row.Image_URL); // Add only unique images
+                spot.images.push(row.Image_URL); // Add unique images
             }
             if (row.Amenity_Name && !spot.amenities.includes(row.Amenity_Name)) {
                 spot.amenities.push(row.Amenity_Name); // Add only unique amenities
             }
-            if (row.Review_Rating && !spot.reviews.some(review => review.rating === row.Review_Rating && review.comment === row.Review_Comment)) {
-                spot.reviews.push({
-                    rating: row.Review_Rating,
-                    comment: row.Review_Comment,
-                    image: row.Review_Image,
-                    date: row.Review_Date // Assuming this is already stored as is
-                });
+            if (row.Review_Rating && row.Review_Comment) {
+                // Check if this review is already in the array (based on rating and comment)
+                const reviewExists = spot.reviews.some(review => 
+                    review.rating === row.Review_Rating && review.comment === row.Review_Comment
+                );
+                if (!reviewExists) {
+                    spot.reviews.push({
+                        rating: row.Review_Rating,
+                        comment: row.Review_Comment,
+                        image: row.Review_Image || null, // Image is optional (null if missing)
+                        date: row.Review_Date // Assuming this is always available
+                    });
+                }
             }
             if (row.Booking_ID && !spot.bookings.some(booking => booking.bookingId === row.Booking_ID)) {
                 const startDate = new Date(row.Booking_Start); // This will be in local time
                 const endDate = new Date(row.Booking_End); // This will be in local time
-
+        
                 // Ensure the date is formatted as YYYY-MM-DD (without shifting)
                 const formattedStartDate = startDate.toLocaleDateString('en-CA'); // Using the 'en-CA' format for YYYY-MM-DD
                 const formattedEndDate = endDate.toLocaleDateString('en-CA'); // Using the 'en-CA' format for YYYY-MM-DD
-
+        
                 spot.bookings.push({
                     bookingId: row.Booking_ID,
                     start: formattedStartDate, // Correct date format
@@ -355,7 +366,9 @@ app.get('/api/spot_details/:id', async (req, res) => {
                 });
             }
         });
+        
 
+        // Return the spot details as a JSON response
         res.json({ spot });
     } catch (error) {
         console.error('Error fetching spot details:', error);
@@ -365,6 +378,7 @@ app.get('/api/spot_details/:id', async (req, res) => {
         });
     }
 });
+
 
 
 // Fetch spot availability
@@ -1276,6 +1290,349 @@ app.delete("/api/delete-spot", authenticateToken, async (req, res) => {
         res.status(500).json({ error: `Error deleting spot: ${error.message}` });
     }
 });
+
+// Endpoint to get spots based on user's favorite Spot_IDs
+app.post('/api/spots-favorites', async (req, res) => {
+    try {
+        // Extract User_ID from the request body
+        const { userId } = req.body;
+
+        // Validate User_ID
+        if (!userId) {
+            return res.status(400).json({ message: 'User ID is required.' });
+        }
+
+        // Fetch Spot_IDs from the favorite table
+        const favoriteQuery = `
+            SELECT Spot_ID
+            FROM favorite
+            WHERE User_ID = ?
+        `;
+        const favoriteResults = await db.getQuery(favoriteQuery, [userId]);
+
+        if (!favoriteResults || favoriteResults.length === 0) {
+            return res.status(404).json({ message: 'No favorite spots found for this user.' });
+        }
+
+        // Extract Spot_IDs as an array
+        const spotIds = favoriteResults.map(row => row.Spot_ID);
+
+        // Validate Spot_IDs
+        if (spotIds.length === 0) {
+            return res.status(404).json({ message: 'No valid Spot IDs found in favorites.' });
+        }
+
+        // Convert Spot_IDs array to a comma-separated string for the SQL query
+        const spotIdsString = spotIds.join(',');
+
+        // SQL query to fetch spot details based on Spot_IDs
+        const spotsQuery = `
+            SELECT 
+                S.Spot_ID,
+                S.Spot_Name,
+                S.Spot_Price_Per_Night,
+                Ci.City_Name AS City_Name,
+                Co.Country_Name AS Country_Name,
+                SC.Spot_Category_Name AS Category_Name,
+                M.Media_File_Url AS Image_URL
+            FROM spots AS S
+            INNER JOIN Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
+            INNER JOIN Spot_Category AS SC ON SC.Spot_Category_ID = SSC.Spot_Category_ID
+            INNER JOIN Country AS Co ON S.Country_ID = Co.Country_ID
+            INNER JOIN City AS Ci ON S.City_ID = Ci.City_ID
+            INNER JOIN Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
+            INNER JOIN Media AS M ON SM.Media_ID = M.Media_ID
+            WHERE S.Spot_ID IN (${spotIdsString})
+        `;
+
+        // Execute the query to fetch spot details
+        const spotsResults = await db.getQuery(spotsQuery);
+
+        if (!spotsResults || spotsResults.length === 0) {
+            return res.status(404).json({ message: 'No spots found for the given Spot IDs.' });
+        }
+
+        // Group spots by ID
+        const spotsMap = new Map();
+
+        spotsResults.forEach(row => {
+            if (!spotsMap.has(row.Spot_ID)) {
+                spotsMap.set(row.Spot_ID, {
+                    id: row.Spot_ID,
+                    name: row.Spot_Name,
+                    pricePerNight: row.Spot_Price_Per_Night,
+                    location: {
+                        city: row.City_Name,
+                        country: row.Country_Name
+                    },
+                    category: row.Category_Name, // Only 1 category
+                    images: [] // Initialize images as an array
+                });
+            }
+
+            // Add image to the images array
+            spotsMap.get(row.Spot_ID).images.push(row.Image_URL);
+        });
+
+        // Convert map to array and limit to 20 spots
+        const spots = Array.from(spotsMap.values()).slice(0, 20);
+
+        res.json({
+            message: 'Favorite spots retrieved successfully',
+            spots: spots
+        });
+    } catch (error) {
+        console.error('Error fetching favorite spots:', error);
+        res.status(500).json({
+            message: 'Error fetching favorite spots',
+            error: error.message
+        });
+    }
+});
+
+// endpoint to fetch upcoming, past, and canceled bookings
+app.post('/api/bookings', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        if (!userId || typeof userId !== 'number') {
+            return res.status(400).json({ message: 'User ID is invalid.' });
+        }
+
+        const sql = `
+            SELECT 
+                B.Booking_ID,
+                B.Booking_Start AS Check_In_Date,
+                B.Booking_End AS Check_Out_Date,
+                B.Booking_Status,
+                B.Booking_Total,
+                B.Booking_Date,
+                P.Payment_Date,
+                P.Payment_Status,
+                P.Payment_Method,
+                PR.Promotion_Name,
+                PR.Promotion_Type,
+                PR.Promotion_Amount,
+                S.Spot_ID,
+                S.Spot_Name,
+                S.Spot_Description,
+                S.Spot_Price_Per_Night,
+                S.Spot_Max_Guests,
+                SC.Spot_Category_ID AS Category_ID,
+                SC.Spot_Category_Name AS Category_Name,
+                M.Media_File_Url AS Image_URL,
+                CASE
+                    WHEN B.Booking_End >= CURRENT_DATE THEN 'Upcoming'
+                    ELSE 'Past'
+                END AS Booking_Type,
+                C.Cancellation_Time 
+            FROM Booking AS B
+            LEFT JOIN Payment AS P ON P.Payment_ID = B.Payment_ID
+            LEFT JOIN Promotions AS PR ON PR.Promotion_ID = B.Promotion_ID
+            INNER JOIN spots AS S ON B.Spot_ID = S.Spot_ID
+            INNER JOIN Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
+            INNER JOIN Spot_Category AS SC ON SSC.Spot_Category_ID = SC.Spot_Category_ID
+            LEFT JOIN Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
+            LEFT JOIN Media AS M ON SM.Media_ID = M.Media_ID
+            LEFT JOIN cancellation AS C ON C.Booking_ID = B.Booking_ID
+            WHERE B.User_ID = ?
+            ORDER BY B.Booking_Start ASC;
+        `;
+
+        const results = await db.getQuery(sql, [userId]);
+
+        if (!results || results.length === 0) {
+            return res.status(404).json({ message: 'No bookings found for this user.' });
+        }
+
+        const upcomingBookings = [];
+        const pastBookings = [];
+        const canceledBookings = [];
+        const seenBookings = new Set();
+
+        results.forEach(row => {
+            const bookingId = row.Booking_ID;
+
+            if (seenBookings.has(bookingId)) {
+                return;
+            }
+            seenBookings.add(bookingId);
+
+            const booking = {
+                bookingId: bookingId,
+                checkInDate: row.Check_In_Date,
+                checkOutDate: row.Check_Out_Date,
+                bookingStatus: row.Booking_Status,
+                bookingTotal: row.Booking_Total,
+                bookingDate: row.Booking_Date,
+                paymentDate: row.Payment_Date,
+                paymentStatus: row.Payment_Status,
+                paymentMethod: row.Payment_Method,
+                promotion: {
+                    name: row.Promotion_Name,
+                    type: row.Promotion_Type,
+                    amount: row.Promotion_Amount
+                },
+                spot: {
+                    spotId: row.Spot_ID,
+                    spotName: row.Spot_Name,
+                    spotDescription: row.Spot_Description,
+                    spotPricePerNight: row.Spot_Price_Per_Night,
+                    spotMaxGuests: row.Spot_Max_Guests,
+                    categoryId: row.Category_ID,
+                    categoryName: row.Category_Name,
+                    images: [] // Ensure images are empty to start with
+                },
+                cancellationDate: row.Cancellation_Time // Check if cancellation exists
+            };
+
+            // Accumulate images (all images for this booking)
+            if (row.Image_URL && !booking.spot.images.includes(row.Image_URL)) {
+                booking.spot.images.push(row.Image_URL);
+            }
+
+            // Group bookings into upcoming, past, or canceled
+            if (booking.cancellationDate) {
+                canceledBookings.push(booking); // If there's a cancellation date, it's considered canceled
+            } else if (row.Booking_Type === 'Upcoming') {
+                upcomingBookings.push(booking);
+            } else {
+                pastBookings.push(booking);
+            }
+        });
+
+        res.json({
+            message: 'Bookings retrieved successfully',
+            upcomingBookings: upcomingBookings,
+            pastBookings: pastBookings,
+            canceledBookings: canceledBookings  // Include canceled bookings in a third array
+        });
+    } catch (error) {
+        console.error('Error fetching bookings:', error);
+        res.status(500).json({
+            message: 'Error fetching bookings',
+            error: error.message
+        });
+    }
+});
+
+// Endpoint to cancel a booking
+app.post('/api/cancel-booking', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        const { bookingId, cancellationReason } = req.body;
+
+        if (!bookingId || !cancellationReason) {
+            return res.status(400).json({ message: 'Booking ID and cancellation reason are required.' });
+        }
+
+        // Step 1: Fetch the booking details for the provided Booking_ID
+        const bookingSql = `
+            SELECT Booking_ID, Booking_Total, Booking_Status, User_ID
+            FROM Booking
+            WHERE Booking_ID = ?
+        `;
+        
+        const bookingResults = await db.getQuery(bookingSql, [bookingId]);
+
+        if (!bookingResults || bookingResults.length === 0) {
+            return res.status(404).json({ message: 'Booking not found.' });
+        }
+
+        const booking = bookingResults[0];
+
+        // Log the fetched booking details
+        console.log('Fetched Booking:', booking);
+
+        // Step 2: Ensure the user is the owner of the booking
+        if (booking.User_ID !== userId) {
+            return res.status(403).json({ message: 'You are not authorized to cancel this booking.' });
+        }
+
+        // Step 3: Ensure the booking is not already canceled
+        if (booking.Booking_Status === 'Cancelled') {
+            return res.status(400).json({ message: 'This booking has already been canceled.' });
+        }
+
+        // Step 4: Calculate the refund (75% of Booking_Total)
+        const refundAmount = (booking.Booking_Total * 0.75).toFixed(2);
+        console.log('Calculated Refund Amount:', refundAmount);
+
+        // Step 5: Insert the cancellation record into the 'calcellation' table
+        const cancellationSql = `
+            INSERT INTO Cancellation (Booking_ID, Cancellation_Reason, Cancellation_Time, Cancellation_Refund_Amount)
+            VALUES (?, ?, NOW(), ?)
+        `;
+
+        // Log the cancellation data before inserting
+        console.log('Cancellation Data:', {
+            bookingId,
+            cancellationReason,
+            refundAmount
+        });
+
+        await db.getQuery(cancellationSql, [bookingId, cancellationReason, refundAmount]);
+
+        // Step 6: Return success response
+        res.json({
+            message: 'Booking successfully canceled.',
+            refundAmount: refundAmount
+        });
+
+    } catch (error) {
+        console.error('Error canceling booking:', error);
+        res.status(500).json({
+            message: 'Error canceling booking.',
+            error: error.message
+        });
+    }
+});
+
+// endpoint to submit a review
+app.post('/api/submit-review', authenticateToken, async (req, res) => {
+    try {
+        // Log the incoming data for debugging purposes
+        console.log('Request body:', req.body);
+        console.log('Uploaded file:', req.file); // If you're uploading a file
+
+        const userId = req.user.userId;
+        const { spotId, reviewRating, reviewComment } = req.body;
+        let reviewImage = null;
+
+        // If an image is uploaded, assign the file path
+        if (req.file) {
+            reviewImage = req.file.path;  // Store the image path in the database
+        }
+
+        // Step 1: Validate the input fields
+        if (!spotId || !reviewRating || !reviewComment) {
+            return res.status(400).json({ message: 'Spot ID, rating, and comment are required.' });
+        }
+
+        if (reviewRating < 1 || reviewRating > 5) {
+            return res.status(400).json({ message: 'Rating must be between 1 and 5.' });
+        }
+
+        // Step 2: Insert the review into the database
+        const reviewSql = `
+            INSERT INTO Review (User_ID, Spot_ID, Review_Rating, Review_Comment, Review_Image, Review_Date)
+            VALUES (?, ?, ?, ?, ?, NOW())
+        `;
+
+        await db.getQuery(reviewSql, [userId, spotId, reviewRating, reviewComment, reviewImage]);
+
+        // Step 3: Return success response
+        res.json({ message: 'Review submitted successfully!' });
+
+    } catch (error) {
+        console.error('Error submitting review:', error);
+        res.status(500).json({
+            message: 'Error submitting review.',
+            error: error.message
+        });
+    }
+});
+
+
 
 
 const PORT = process.env.PORT || 3000;
