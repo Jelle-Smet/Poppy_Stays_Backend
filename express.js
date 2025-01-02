@@ -37,8 +37,8 @@ app.post('/api/signup', async (req, res) => {
     try {
         const hashedPassword = await bcrypt.hash(User_Password, 10);
 
-        const sql = `INSERT INTO User (User_FN, User_LN, User_Email, User_password, User_Number, User_Date_Of_Birth, User_Address) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?)`;
+        const sql = `INSERT INTO User (User_FN, User_LN, User_Email, User_password, User_Number, User_Date_Of_Birth, User_Address, User_Creation_Date) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`;
 
         await db.getQuery(sql, [User_FN, User_LN, User_Email, hashedPassword, User_Number, User_Date_Of_Birth, User_Address]);
 
@@ -51,37 +51,45 @@ app.post('/api/signup', async (req, res) => {
 
 app.post('/api/login', async (req, res) => {
     const { User_Email, User_Password } = req.body;
-    
+
+    // Ensure both email and password are provided
     if (!User_Email || !User_Password) {
         return res.status(400).json({ message: 'Email and password are required' });
     }
 
     try {
+        // SQL query to fetch the user by email and join with owner information
         const sql = `SELECT U.User_ID, U.User_Email, U.User_password, U.User_FN, U.User_LN, O.Owner_ID
                      FROM User as U
-                     INNER JOIN owner as O
+                     LEFT JOIN owner as O
                      ON U.User_ID = O.User_ID
                      WHERE U.User_Email = ? LIMIT 1`;
 
+        // Execute query with provided email
         const results = await db.getQuery(sql, [User_Email]);
-        console.log('Database results:', results);  // Log to check
+        console.log('Database results:', results);  // Log to check results
 
+        // Check if user is found
         if (!results || results.length === 0) {
             return res.status(404).json({ message: 'User not found' });
         }
 
         const user = results[0];
 
+        // Check if password is stored in the database
         if (!user.User_password) {
-            return res.status(500).json({ message: 'Authentication error' });
+            return res.status(500).json({ message: 'Authentication error, password missing' });
         }
 
+        // Compare the password with the hashed password in the database
         const isPasswordValid = await bcrypt.compare(User_Password, user.User_password);
-        
+
+        // If password is invalid, return an error
         if (!isPasswordValid) {
             return res.status(401).json({ message: 'Invalid password' });
         }
 
+        // Generate JWT token upon successful login
         const token = jwt.sign(
             { 
                 userId: user.User_ID,
@@ -89,10 +97,11 @@ app.post('/api/login', async (req, res) => {
                 firstName: user.User_FN,
                 lastName: user.User_LN
             },
-            process.env.JWT_SECRET,
-            { expiresIn: '1h' }
+            process.env.JWT_SECRET,  // Ensure this is set in your environment variables
+            { expiresIn: '1h' } // Token expiration time
         );
 
+        // Respond with the login success message and token
         return res.status(200).json({
             message: 'Login successful',
             token,
@@ -101,17 +110,18 @@ app.post('/api/login', async (req, res) => {
                 email: user.User_Email,
                 firstName: user.User_FN,
                 lastName: user.User_LN,
-                ownerId: user.Owner_ID  // Ensure this field is correct
+                ownerId: user.Owner_ID  // Ensure this field is correct from the query
             }
         });
     } catch (error) {
-        console.error('Login error:', error); // Log error for debugging
-        return res.status(500).json({ 
+        console.error('Login error:', error); // Log the error for debugging
+        return res.status(500).json({
             message: 'Error during login process',
-            error: error.message 
+            error: error.message
         });
     }
 });
+
 
 
 // New route to get user profile
@@ -138,7 +148,8 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
             email: user.User_Email,
             profilePic: user.User_Pfp,
             bio: user.User_Bio,
-            role: user.role
+            role: user.role,
+            password: user.User_Password,
         });
         console.log('Profile Picture:', user.User_Pfp); // Log profile picture for debugging
     } catch (error) {
@@ -190,6 +201,86 @@ app.post('/api/become-owner', authenticateToken, async (req, res) => {
     }
 });
 
+// Update email
+app.put('/api/profile/email', authenticateToken, async (req, res) => {
+    const { email } = req.body;
+    try {
+        const sql = 'UPDATE User SET User_Email = ? WHERE User_ID = ?';
+        await db.getQuery(sql, [email, req.user.userId]);
+        res.json({ message: 'Email updated successfully' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error updating email', error: error.message });
+    }
+});
+
+// endpoint to check password. 
+app.put('/api/profile/password', async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    const token = req.headers['authorization'].split(' ')[1]; // Get the token from the headers
+
+    // Decode the token to get user information (you might use jwt.decode here)
+    const decodedToken = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decodedToken.userId;
+
+    try {
+        // Get the user data from the database
+        const sql = `SELECT User_password FROM User WHERE User_ID = ?`;
+        const results = await db.getQuery(sql, [userId]);
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const user = results[0];
+
+        // Compare the current password with the hashed password in the database
+        const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.User_password);
+
+        if (!isCurrentPasswordValid) {
+            return res.status(401).json({ message: 'Current password is incorrect' });
+        }
+
+        // Proceed to update the password (hash the new password)
+        const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+        // Update the password in the database
+        const updateSql = `UPDATE User SET User_password = ? WHERE User_ID = ?`;
+        await db.getQuery(updateSql, [hashedNewPassword, userId]);
+
+        return res.status(200).json({ message: 'Password updated successfully' });
+
+    } catch (error) {
+        console.error('Error updating password:', error);
+        return res.status(500).json({ message: 'Error updating password', error: error.message });
+    }
+});
+
+
+// Update address
+app.put('/api/profile/address', authenticateToken, async (req, res) => {
+    const { address } = req.body;
+    try {
+        const sql = 'UPDATE User SET User_Address = ? WHERE User_ID = ?';
+        await db.getQuery(sql, [address, req.user.userId]);
+        res.json({ message: 'Address updated successfully' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error updating address', error: error.message });
+    }
+});
+
+// Update phone number
+app.put('/api/profile/phone-number', authenticateToken, async (req, res) => {
+    const { phoneNumber } = req.body;
+    try {
+        const sql = 'UPDATE User SET User_Number = ? WHERE User_ID = ?';
+        await db.getQuery(sql, [phoneNumber, req.user.userId]);
+        res.json({ message: 'Phone number updated successfully' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error updating phone number', error: error.message });
+    }
+});
+
+// get all spots. 
 app.get('/api/all-spots', async (req, res) => {
     try {
         const sql = `
@@ -1629,6 +1720,158 @@ app.post('/api/submit-review', authenticateToken, async (req, res) => {
             message: 'Error submitting review.',
             error: error.message
         });
+    }
+});
+
+// endpoint to fetch upcoming, past, and canceled bookings based on spot_Id
+app.post('/api/Owner_Bookings', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.userId; // Retrieve the userId from the JWT token
+        const spotId = req.body.spotId; // Retrieve the spotId from the request body
+
+        if (!userId || typeof userId !== 'number' || !spotId || typeof spotId !== 'number') {
+            return res.status(400).json({ message: 'User ID or Spot ID is invalid.' });
+        }
+
+        const sql = `
+            SELECT 
+                B.Booking_ID,
+                B.Booking_Start AS Check_In_Date,
+                B.Booking_End AS Check_Out_Date,
+                B.Booking_Status,
+                B.Booking_Total,
+                B.Booking_Date,
+                P.Payment_Date,
+                P.Payment_Status,
+                P.Payment_Method,
+                PR.Promotion_Name,
+                PR.Promotion_Type,
+                PR.Promotion_Amount,
+                S.Spot_ID,
+                S.Spot_Name,
+                CASE
+                    WHEN B.Booking_End >= CURRENT_DATE THEN 'Upcoming'
+                    ELSE 'Past'
+                END AS Booking_Type,
+                C.Cancellation_Time 
+            FROM Booking AS B
+            LEFT JOIN Payment AS P ON P.Payment_ID = B.Payment_ID
+            LEFT JOIN Promotions AS PR ON PR.Promotion_ID = B.Promotion_ID
+            INNER JOIN spots AS S ON B.Spot_ID = S.Spot_ID
+            LEFT JOIN cancellation AS C ON C.Booking_ID = B.Booking_ID
+            WHERE S.Spot_ID = ? AND B.User_ID = ?
+            ORDER BY B.Booking_Start ASC;
+        `;
+
+        const results = await db.getQuery(sql, [spotId, userId]);
+
+        if (!results || results.length === 0) {
+            // Return empty arrays for each category when no bookings exist
+            return res.json({
+                message: 'No bookings found for this spot.',
+                upcomingBookings: [],
+                pastBookings: [],
+                canceledBookings: []
+            });
+        }
+
+        const upcomingBookings = [];
+        const pastBookings = [];
+        const canceledBookings = [];
+        const seenBookings = new Set();
+
+        results.forEach(row => {
+            const bookingId = row.Booking_ID;
+
+            if (seenBookings.has(bookingId)) {
+                return;
+            }
+            seenBookings.add(bookingId);
+
+            const booking = {
+                bookingId: bookingId,
+                checkInDate: row.Check_In_Date,
+                checkOutDate: row.Check_Out_Date,
+                bookingStatus: row.Booking_Status,
+                bookingTotal: row.Booking_Total,
+                bookingDate: row.Booking_Date,
+                paymentDate: row.Payment_Date,
+                paymentStatus: row.Payment_Status,
+                paymentMethod: row.Payment_Method,
+                promotion: {
+                    name: row.Promotion_Name,
+                    type: row.Promotion_Type,
+                    amount: row.Promotion_Amount
+                },
+                spot: {
+                    spotId: row.Spot_ID,
+                    spotName: row.Spot_Name  // Only include the spot name
+                },
+                cancellationDate: row.Cancellation_Time
+            };
+
+            // Group bookings into upcoming, past, or canceled
+            if (booking.cancellationDate) {
+                canceledBookings.push(booking);
+            } else if (row.Booking_Type === 'Upcoming') {
+                upcomingBookings.push(booking);
+            } else {
+                pastBookings.push(booking);
+            }
+        });
+
+        res.json({
+            message: 'Bookings retrieved successfully',
+            upcomingBookings,
+            pastBookings,
+            canceledBookings
+        });
+    } catch (error) {
+        console.error('Error fetching bookings:', error);
+        res.status(500).json({
+            message: 'Error fetching bookings',
+            error: error.message
+        });
+    }
+});
+
+// Update booking status to "Confirmed" and create a notification
+app.put('/api/booking/:bookingId/status', authenticateToken, async (req, res) => {
+    const { bookingId } = req.params;
+    const { spotName } = req.body;  // Get SpotName from the request body
+
+    try {
+        // SQL query to check if the booking exists and get associated details
+        const checkSql = 'SELECT Booking_Status, User_ID, Booking_Start, Booking_End FROM Booking WHERE Booking_ID = ?';
+        const booking = await db.getQuery(checkSql, [bookingId]);
+        
+        if (booking.length === 0) {
+            return res.status(404).json({ message: 'Booking not found' });
+        }
+
+        // Check if the booking is already confirmed or not
+        if (booking[0].Booking_Status === 'Confirmed') {
+            return res.status(400).json({ message: 'Booking is already confirmed' });
+        }
+
+        // SQL query to update the booking status to "Confirmed"
+        const updateSql = 'UPDATE Booking SET Booking_Status = ? WHERE Booking_ID = ?';
+        
+        await db.getQuery(updateSql, ['Confirmed', bookingId]);
+        
+        // Create a notification for the user
+        const userId = booking[0].User_ID;
+        const bookingStart = booking[0].Booking_Start;
+        const bookingEnd = booking[0].Booking_End;
+        const notificationContent = `Exciting news! Your booking at ${spotName} from ${bookingStart} to ${bookingEnd} has just been confirmed by the owner. Get ready for your adventure!`;
+        
+        const notificationSql = 'INSERT INTO Notification (User_ID, Notification_Content, Notification_Read, Notification_Time) VALUES (?, ?, false, NOW())';
+        
+        await db.getQuery(notificationSql, [userId, notificationContent]);
+
+        res.json({ message: 'Booking status updated to "Confirmed" successfully and notification sent.' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error updating booking status and creating notification', error: error.message });
     }
 });
 
