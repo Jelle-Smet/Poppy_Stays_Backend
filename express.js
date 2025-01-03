@@ -288,6 +288,8 @@ app.get('/api/all-spots', async (req, res) => {
             S.Spot_ID,
             S.Spot_Name,
             S.Spot_Price_Per_Night,
+            S.Spot_Latitude,
+            S.Spot_Longitude,
             Ci.City_Name AS City_Name,
             Co.Country_Name AS Country_Name,
             SC.Spot_Category_Name AS Category_Name,
@@ -315,6 +317,8 @@ app.get('/api/all-spots', async (req, res) => {
                     id: row.Spot_ID,
                     name: row.Spot_Name,
                     pricePerNight: row.Spot_Price_Per_Night,
+                    latitude: row.Spot_Latitude,
+                    longitude: row.Spot_Longitude,
                     location: {
                         city: row.City_Name,
                         country: row.Country_Name
@@ -1874,6 +1878,314 @@ app.put('/api/booking/:bookingId/status', authenticateToken, async (req, res) =>
         res.status(500).json({ message: 'Error updating booking status and creating notification', error: error.message });
     }
 });
+
+// endpoint to fetch the most booked spots.
+app.get('/api/top-booked-spots', async (req, res) => {
+    try {
+        // Step 1: Query to get top 5 Spot_IDs based on non-canceled bookings
+        const topSpotsQuery = `
+        SELECT 
+            S.Spot_ID,
+            COUNT(B.Booking_ID) AS Booking_Count
+        FROM spots AS S
+        LEFT JOIN Booking AS B ON S.Spot_ID = B.Spot_ID
+        LEFT JOIN Cancellation AS C ON B.Booking_ID = C.Booking_ID
+        WHERE C.Booking_ID IS NULL  -- Exclude canceled bookings
+        GROUP BY S.Spot_ID
+        ORDER BY Booking_Count DESC
+        LIMIT 5`;
+
+        const topSpotsResult = await db.getQuery(topSpotsQuery);
+
+        if (!topSpotsResult || topSpotsResult.length === 0) {
+            return res.status(404).json({ message: 'No spots found' });
+        }
+
+        // Extract Spot_IDs into an array
+        const spotIds = topSpotsResult.map(row => row.Spot_ID);
+        
+        // Step 2: Query to get detailed info for the fetched Spot_IDs
+        const spotDetailsQuery = `
+        SELECT 
+            S.Spot_ID,
+            S.Spot_Name,
+            S.Spot_Price_Per_Night,
+            S.Spot_Latitude,
+            S.Spot_Longitude,
+            Ci.City_Name AS City_Name,
+            Co.Country_Name AS Country_Name,
+            SC.Spot_Category_Name AS Category_Name,
+            M.Media_File_Url AS Image_URL
+        FROM spots AS S
+        INNER JOIN Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
+        INNER JOIN Spot_Category AS SC ON SC.Spot_Category_ID = SSC.Spot_Category_ID
+        INNER JOIN Country AS Co ON S.Country_ID = Co.Country_ID
+        INNER JOIN City AS Ci ON S.City_ID = Ci.City_ID
+        INNER JOIN Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
+        INNER JOIN Media AS M ON SM.Media_ID = M.Media_ID
+        WHERE S.Spot_ID IN (${spotIds.map(() => '?').join(', ')})`;
+
+        // Execute the query with the IDs as individual parameters
+        const spotDetailsResult = await db.getQuery(spotDetailsQuery, spotIds);
+
+        if (!spotDetailsResult || spotDetailsResult.length === 0) {
+            return res.status(404).json({ message: 'No details found for the top spots' });
+        }
+
+        // Step 3: Process results to group spot details by ID
+        const spotsMap = new Map();
+
+        spotDetailsResult.forEach(row => {
+            if (!spotsMap.has(row.Spot_ID)) {
+                spotsMap.set(row.Spot_ID, {
+                    id: row.Spot_ID,
+                    name: row.Spot_Name,
+                    pricePerNight: row.Spot_Price_Per_Night,
+                    latitude: row.Spot_Latitude,
+                    longitude: row.Spot_Longitude,
+                    location: {
+                        city: row.City_Name,
+                        country: row.Country_Name
+                    },
+                    category: row.Category_Name, // Only 1 category
+                    images: [] // Initialize images as an array
+                });
+            }
+
+            // Add image to the images array
+            spotsMap.get(row.Spot_ID).images.push(row.Image_URL);
+        });
+
+        // Convert map to array
+        const spots = Array.from(spotsMap.values());
+
+        // Respond with the detailed spots information
+        res.json({
+            message: 'Top booked spots retrieved successfully',
+            spots: spots
+        });
+    } catch (error) {
+        console.error('Error fetching top booked spots:', error);
+        res.status(500).json({
+            message: 'Error fetching top booked spots',
+            error: error.message
+        });
+    }
+});
+
+// Endpoint to search for spots by name
+app.get('/api/search-spots', async (req, res) => {
+    try {
+        // Get the search term from the query parameter
+        const searchTerm = req.query.q;
+
+        if (!searchTerm) {
+            return res.status(400).json({ message: 'Search term is required' });
+        }
+
+        // Step 1: Query to get distinct Spot_IDs matching the search term
+        const searchQuery = `
+            SELECT DISTINCT 
+                S.Spot_ID
+            FROM spots AS S
+            WHERE S.Spot_Name LIKE ? 
+        `;
+
+        // Execute query with wildcard search term
+        const spotIds = await db.getQuery(searchQuery, [`%${searchTerm}%`]);
+
+        if (spotIds.length === 0) {
+            return res.status(404).json({ message: 'No spots found' });
+        }
+
+        // Extract Spot_IDs into an array
+        const spotIdsArray = spotIds.map(row => row.Spot_ID);
+
+        // Step 2: Query to get detailed info for the fetched Spot_IDs
+        const spotDetailsQuery = `
+        SELECT 
+            S.Spot_ID,
+            S.Spot_Name,
+            S.Spot_Price_Per_Night,
+            S.Spot_Latitude,
+            S.Spot_Longitude,
+            Ci.City_Name AS City_Name,
+            Co.Country_Name AS Country_Name,
+            SC.Spot_Category_Name AS Category_Name,
+            M.Media_File_Url AS Image_URL
+        FROM spots AS S
+        INNER JOIN Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
+        INNER JOIN Spot_Category AS SC ON SC.Spot_Category_ID = SSC.Spot_Category_ID
+        INNER JOIN Country AS Co ON S.Country_ID = Co.Country_ID
+        INNER JOIN City AS Ci ON S.City_ID = Ci.City_ID
+        INNER JOIN Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
+        INNER JOIN Media AS M ON SM.Media_ID = M.Media_ID
+        WHERE S.Spot_ID IN (${spotIds.map(() => '?').join(', ')})`;
+
+        // Execute the query with the Spot_IDs as individual parameters
+        const spotDetails = await db.getQuery(spotDetailsQuery, spotIdsArray);
+        
+        if (!spotDetails || spotDetails.length === 0) {
+            return res.status(404).json({ message: 'No spot details found' });
+        }
+
+        // Step 3: Group spots by ID
+        const spotsMap = new Map();
+        
+        spotDetails.forEach(row => {
+            if (!spotsMap.has(row.Spot_ID)) {
+                spotsMap.set(row.Spot_ID, {
+                    id: row.Spot_ID,
+                    name: row.Spot_Name,
+                    pricePerNight: row.Spot_Price_Per_Night,
+                    latitude: row.Spot_Latitude,
+                    longitude: row.Spot_Longitude,
+                    location: {
+                        city: row.City_Name,
+                        country: row.Country_Name
+                    },
+                    category: row.Category_Name, // Only 1 category
+                    images: [] // Initialize images as an array
+                });
+            }
+
+            // Add image to the images array
+            spotsMap.get(row.Spot_ID).images.push(row.Image_URL);
+        });
+
+        // Convert map to array
+        const spots = Array.from(spotsMap.values());
+        // Respond with the detailed spots information
+        res.json({
+            message: 'Search results retrieved successfully',
+            spots: spots
+        });
+
+    } catch (error) {
+        console.error('Error searching spots:', error);
+        res.status(500).json({
+            message: 'Error searching spots',
+            error: error.message,
+        });
+    }
+});
+
+// Endpoint to fetch Poppy's pick (most booked categories by a specific user)
+app.get('/api/poppys-pick', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.userId; // Get userId from JWT token (auth middleware)
+        
+        // Step 1: Query to get the most booked categories by the user, excluding canceled bookings
+        const topCategoriesQuery = `
+            SELECT
+                SC.Spot_Category_ID AS Category,
+                COUNT(*) AS Booked_Count
+            FROM
+                Booking AS B
+            JOIN
+                Spots AS S ON B.Spot_ID = S.Spot_ID
+            JOIN
+                Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
+            JOIN
+                Spot_Category AS SC ON SSC.Spot_Category_ID = SC.Spot_Category_ID
+            LEFT JOIN
+                Cancellation AS C ON B.Booking_ID = C.Booking_ID
+            WHERE
+                B.User_ID = ?  -- Dynamic user ID from token
+                AND C.Booking_ID IS NULL  -- Exclude canceled bookings
+            GROUP BY
+                SC.Spot_Category_ID
+            ORDER BY
+                Booked_Count DESC
+        `;
+
+        const topCategoriesResult = await db.getQuery(topCategoriesQuery, [userId]);
+
+        if (!topCategoriesResult || topCategoriesResult.length === 0) {
+            return res.status(404).json({ message: 'No categories found for this user' });
+        }
+
+        // Extract category IDs into an array
+        const categoryIds = topCategoriesResult.map(row => row.Category);
+
+        // Step 2: Query to get detailed info for the spots that belong to the top categories
+        const spotsQuery = `
+            SELECT 
+                S.Spot_ID,
+                S.Spot_Name,
+                S.Spot_Price_Per_Night,
+                S.Spot_Latitude,
+                S.Spot_Longitude,
+                Ci.City_Name AS City_Name,
+                Co.Country_Name AS Country_Name,
+                SC.Spot_Category_Name AS Category_Name,
+                M.Media_File_Url AS Image_URL
+            FROM 
+                spots AS S
+            INNER JOIN 
+                Spot_Spot_Category AS SSC ON S.Spot_ID = SSC.Spot_ID
+            INNER JOIN 
+                Spot_Category AS SC ON SC.Spot_Category_ID = SSC.Spot_Category_ID
+            INNER JOIN 
+                Country AS Co ON S.Country_ID = Co.Country_ID
+            INNER JOIN 
+                City AS Ci ON S.City_ID = Ci.City_ID
+            INNER JOIN 
+                Spot_Media AS SM ON S.Spot_ID = SM.Spot_ID
+            INNER JOIN 
+                Media AS M ON SM.Media_ID = M.Media_ID
+            WHERE 
+                SC.Spot_Category_ID IN (${categoryIds.map(() => '?').join(', ')})  -- Dynamically created placeholders
+        `;
+
+        // Execute the query with the category IDs as parameters
+        const spotsResult = await db.getQuery(spotsQuery, categoryIds);
+
+        if (!spotsResult || spotsResult.length === 0) {
+            return res.status(404).json({ message: 'No spots found for the top categories' });
+        }
+
+        // Step 3: Process results to group spot details by ID
+        const spotsMap = new Map();
+
+        spotsResult.forEach(row => {
+            if (!spotsMap.has(row.Spot_ID)) {
+                spotsMap.set(row.Spot_ID, {
+                    id: row.Spot_ID,
+                    name: row.Spot_Name,
+                    pricePerNight: row.Spot_Price_Per_Night,
+                    latitude: row.Spot_Latitude,
+                    longitude: row.Spot_Longitude,
+                    location: {
+                        city: row.City_Name,
+                        country: row.Country_Name
+                    },
+                    category: row.Category_Name, // Only 1 category
+                    images: [] // Initialize images as an array
+                });
+            }
+
+            // Add image to the images array
+            spotsMap.get(row.Spot_ID).images.push(row.Image_URL);
+        });
+
+        // Convert map to array
+        const spots = Array.from(spotsMap.values());
+
+        // Respond with the detailed spots information
+        res.json({
+            message: 'Poppy\'s pick (top booked spots) retrieved successfully',
+            spots: spots
+        });
+    } catch (error) {
+        console.error('Error fetching Poppy\'s pick spots:', error);
+        res.status(500).json({
+            message: 'Error fetching Poppy\'s pick spots',
+            error: error.message
+        });
+    }
+});
+
 
 
 
