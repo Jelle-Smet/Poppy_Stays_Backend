@@ -2186,8 +2186,94 @@ app.get('/api/poppys-pick', authenticateToken, async (req, res) => {
     }
 });
 
+// Endpoint to fetch notifications for a given user
+app.post('/api/Notifications', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.userId; // Retrieve the userId from the JWT token
 
+        if (!userId || typeof userId !== 'number') {
+            return res.status(400).json({ message: 'User ID is invalid.' });
+        }
 
+        const sql = `
+            SELECT 
+                N.Notification_ID,
+                N.Notification_Content,
+                N.Notification_Time,
+                N.Notification_Read
+            FROM Notification AS N
+            WHERE N.User_ID = ?
+            ORDER BY N.Notification_Time DESC;
+        `;
+
+        const results = await db.getQuery(sql, [userId]);
+
+        if (!results || results.length === 0) {
+            // Return empty arrays when no notifications exist
+            return res.json({
+                message: 'No notifications found for this user.',
+                readNotifications: [],
+                unreadNotifications: []
+            });
+        }
+
+        const readNotifications = [];
+        const unreadNotifications = [];
+
+        results.forEach(row => {
+            const notification = {
+                notificationId: row.Notification_ID,
+                content: row.Notification_Content,
+                time: row.Notification_Time
+            };
+
+            // Group notifications into read or unread
+            if (row.Notification_Read) {
+                readNotifications.push(notification);
+            } else {
+                unreadNotifications.push(notification);
+            }
+        });
+
+        res.json({
+            message: 'Notifications retrieved successfully',
+            readNotifications,
+            unreadNotifications
+        });
+    } catch (error) {
+        console.error('Error fetching notifications:', error);
+        res.status(500).json({
+            message: 'Error fetching notifications',
+            error: error.message
+        });
+    }
+});
+
+// Mark a notification as read
+app.post('/api/mark-notification-read', authenticateToken, async (req, res) => {
+    const { notificationId } = req.body;
+
+    try {
+        // Check if the notification exists
+        const checkSql = 'SELECT Notification_ID FROM Notification WHERE Notification_ID = ?';
+        const notification = await db.getQuery(checkSql, [notificationId]);
+
+        if (notification.length === 0) {
+            return res.status(404).json({ message: 'Notification not found.' });
+        }
+
+        // Update the notification's read status
+        const updateSql = 'UPDATE Notification SET Notification_Read = true WHERE Notification_ID = ?';
+        await db.getQuery(updateSql, [notificationId]);
+
+        res.json({ message: 'Notification marked as read successfully.' });
+    } catch (error) {
+        res.status(500).json({
+            message: 'Error marking notification as read',
+            error: error.message,
+        });
+    }
+});
 
 
 const PORT = process.env.PORT || 3000;
