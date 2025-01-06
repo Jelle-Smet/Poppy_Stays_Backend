@@ -513,48 +513,98 @@ app.get('/api/spot-availability/:spotId', async (req, res) => {
     }
 });
 
-// Promo code check endpoint
-app.post('/api/check-promo', async (req, res) => {
-    const { promoCode } = req.body;
-
+// Promo code and gift card check endpoint
+app.post('/api/check-promo-or-giftcard', async (req, res) => {
+    const { code } = req.body;  // Either promoCode or giftCardCode from the client
+    console.log(code);
     try {
-        const sql = `
+        // Log the incoming request
+        console.log(`Received request with code: ${code}`);
+
+        // Check if it's a promo code first
+        let result = await db.getQuery(`
             SELECT * 
             FROM Promotions 
             WHERE Promotion_Code LIKE ? 
             AND Promotion_Active = TRUE 
-            AND CURRENT_DATE BETWEEN Promotion_Start AND Promotion_End`;
+            AND CURRENT_DATE BETWEEN Promotion_Start AND Promotion_End
+        `, [code]);
 
-        const results = await db.getQuery(sql, [promoCode]);
+        if (result && result.length > 0) {
+            const promo = result[0];
+            console.log(`Promo code ${code} is valid`);
 
-        if (!results || results.length === 0) {
-            return res.status(404).json({ message: 'Promo code not found or is inactive' });
+            res.json({
+                type: "promotion",
+                message: "Promo code valid",
+                promotion: {
+                    id: promo.Promotion_ID,
+                    name: promo.Promotion_Name,
+                    description: promo.Promotion_Description,
+                    start: promo.Promotion_Start,
+                    end: promo.Promotion_End,
+                    type: promo.Promotion_Type,
+                    amount: promo.Promotion_Amount
+                }
+            });
+            return;
         }
 
-        const promotion = results[0];
+        // If no valid promo code, check if it's a gift card code
+        result = await db.getQuery(`
+            SELECT * 
+            FROM Gift_Card_Purchase 
+            WHERE Gift_Card_Purchase_Code = ? 
+            AND Gift_Card_Purchase_Used = FALSE
+        `, [code]);
 
-        res.json({
-            message: 'Promo code valid',
-            promotion: {
-                id: promotion.Promotion_ID,
-                name: promotion.Promotion_Name,
-                description: promotion.Promotion_Description,
-                start: promotion.Promotion_Start,
-                end: promotion.Promotion_End,
-                type: promotion.Promotion_Type,
-                amount: promotion.Promotion_Amount
-            }
+        if (result && result.length > 0) {
+            const giftCardPurchase = result[0];
+            const giftCardResult = await db.getQuery(`
+                SELECT * FROM Gift_Card WHERE Gift_Card_ID = ?
+            `, [giftCardPurchase.Gift_Card_ID]);
+
+            const giftCard = giftCardResult[0];
+            console.log(`Gift card code ${code} is valid`);
+
+            // Optionally, mark the gift card as used immediately after successful validation
+            await db.getQuery(`
+                UPDATE Gift_Card_Purchase 
+                SET Gift_Card_Purchase_Used = TRUE 
+                WHERE Gift_Card_Purchase_Code = ?
+            `, [code]);
+
+            res.json({
+                type: "giftcard",
+                message: "Gift card valid",
+                giftCard: {
+                    id: giftCardPurchase.Gift_Card_Purchase_ID,
+                    name: giftCard.Gift_Card_Name,
+                    type: "Fixed",
+                    amount: giftCard.Gift_Card_Amount
+                }
+            });
+            return;
+        }
+
+        // If neither promo code nor gift card code is valid
+        console.log(`Code ${code} is invalid or already used`);
+
+        res.status(404).json({
+            message: "Code not found or invalid"
         });
+
     } catch (error) {
-        console.error('Error checking promo code:', error);
+        // Log any error that occurs
+        console.log(`Error processing code ${code}: ${error.message}`);
         res.status(500).json({
-            message: 'Error checking promo code',
+            message: "Error processing code",
             error: error.message
         });
     }
 });
 
-// Create payment and booking
+// Create payment 
 app.post('/api/create-payment', authenticateToken, async (req, res) => {
     const { paymentAmount, paymentMethod } = req.body;
 
@@ -2249,7 +2299,7 @@ app.post('/api/Notifications', authenticateToken, async (req, res) => {
     }
 });
 
-// Mark a notification as read
+// Endpoint to mark a notification as read
 app.post('/api/mark-notification-read', authenticateToken, async (req, res) => {
     const { notificationId } = req.body;
 
@@ -2272,6 +2322,169 @@ app.post('/api/mark-notification-read', authenticateToken, async (req, res) => {
             message: 'Error marking notification as read',
             error: error.message,
         });
+    }
+});
+
+// GET /api/gift-cards - Fetch all gift cards
+app.get('/api/gift-cards', async (req, res) => {
+    try {
+        const sql = `
+            SELECT 
+                Gift_Card_Id,
+                Gift_Card_name,
+                Gift_Card_amount,
+                Gift_Card_description
+            FROM Gift_Card
+        `;
+
+        const results = await db.getQuery(sql);
+
+        if (!results || results.length === 0) {
+            return res.status(404).json({ message: 'No gift cards found' });
+        }
+
+        // Optionally, you can format the results before sending
+        const giftCards = results.map(row => ({
+            id: row.Gift_Card_Id,
+            name: row.Gift_Card_name,
+            amount: row.Gift_Card_amount,
+            description: row.Gift_Card_description
+        }));
+
+        res.json({
+            message: 'Gift cards retrieved successfully',
+            giftCards: giftCards
+        });
+    } catch (error) {
+        console.error('Error fetching gift cards:', error);
+        res.status(500).json({ 
+            message: 'Error fetching gift cards',
+            error: error.message 
+        });
+    }
+});
+
+// endpoint to get giftcard details
+app.get('/api/gift-card-details/:id', async (req, res) => {
+    const giftCardId = req.params.id;
+  
+    try {
+      const sql = `
+        SELECT 
+          GC.Gift_Card_ID, 
+          GC.Gift_Card_Name, 
+          GC.Gift_Card_Amount, 
+          GC.Gift_Card_Description
+        FROM Gift_Card AS GC
+        WHERE GC.Gift_Card_ID = ?
+      `;
+  
+      const results = await db.getQuery(sql, [giftCardId]);
+  
+      if (!results || results.length === 0) {
+        return res.status(404).json({ message: 'Gift card not found' });
+      }
+  
+      res.json({
+        message: 'Gift card details retrieved successfully',
+        giftCard: results[0]
+      });
+    } catch (error) {
+      console.error('Error fetching gift card details:', error);
+      res.status(500).json({
+        message: 'Error fetching gift card details',
+        error: error.message
+      });
+    }
+});  
+
+// Create gift card purchase and send a notification
+app.post('/api/create-gift-card-purchase', authenticateToken, async (req, res) => {
+    const { 
+        giftCardId,
+        paymentId
+    } = req.body;
+
+    console.log("card_ID = " + giftCardId);
+    console.log("Payment_ID = " + paymentId);
+
+    try {
+        // Generate a unique Gift Card Purchase Code (e.g., a random 6-digit integer)
+        const giftCardPurchaseCode = Math.floor(Math.random() * 1000000);
+
+        // SQL to create the gift card purchase
+        const giftCardPurchaseSql = `
+            INSERT INTO Gift_Card_Purchase 
+                (User_ID, Gift_Card_ID, Payment_ID, Gift_Card_Purchase_Code, Gift_Card_Purchase_Used) 
+            VALUES (?, ?, ?, ?, false)
+        `;
+
+        // Execute the SQL query
+        const giftCardPurchaseResult = await db.getQuery(giftCardPurchaseSql, [
+            req.user.userId,
+            giftCardId,
+            paymentId,
+            giftCardPurchaseCode
+        ]);
+
+        // Create a notification for the user
+        const notificationContent = `Congratulations! Your gift card purchase is successful. Your unique purchase code is ${giftCardPurchaseCode}. Save this code for future use.`;
+        const notificationSql = `
+            INSERT INTO Notification 
+                (User_ID, Notification_Content, Notification_Read, Notification_Time) 
+            VALUES (?, ?, false, NOW())
+        `;
+
+        // Execute the notification query
+        await db.getQuery(notificationSql, [req.user.userId, notificationContent]);
+
+        // Respond with success
+        res.json({ 
+            message: 'Gift card purchase created successfully',
+            giftCardPurchaseId: giftCardPurchaseResult.insertId,
+            purchaseCode: giftCardPurchaseCode // Return the purchase code
+        });
+    } catch (error) {
+        console.error('Error creating gift card purchase:', error);
+        res.status(500).json({ 
+            message: 'Error creating gift card purchase',
+            error: error.message 
+        });
+    }
+});
+
+// Fetch promotions
+app.get('/api/promotions', async (req, res) => {
+    try {
+        
+        const promotionsSql = `
+            SELECT 
+                Promotion_Name, 
+                Promotion_Description, 
+                Promotion_Start, 
+                Promotion_End, 
+                Promotion_Code, 
+                Promotion_Amount
+                promotion_Active
+            FROM Promotions 
+            WHERE Promotion_Active = TRUE`;  // Optional: Filter for active promotions only
+
+        const promotionsResult = await db.getQuery(promotionsSql);
+
+        if (!promotionsResult || promotionsResult.length === 0) {
+            return res.status(404).json({
+                message: 'No active promotions found',
+                promotions: []
+            });
+        }
+
+        res.json({
+            message: 'Active promotions retrieved',
+            promotions: promotionsResult
+        });
+    } catch (error) {
+        console.error('Error fetching promotions:', error);
+        res.status(500).json({ message: 'Error fetching promotions', error: error.message });
     }
 });
 
