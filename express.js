@@ -67,7 +67,7 @@ app.post('/api/login', async (req, res) => {
 
         // Execute query with provided email
         const results = await db.getQuery(sql, [User_Email]);
-        console.log('Database results:', results);  // Log to check results
+        //console.log('Database results:', results);  // Log to check results
 
         // Check if user is found
         if (!results || results.length === 0) {
@@ -148,10 +148,13 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
             email: user.User_Email,
             profilePic: user.User_Pfp,
             bio: user.User_Bio,
+            phoneNumber: user.User_Number,
+            address: user.User_Address,
             role: user.role,
             password: user.User_Password,
         });
-        console.log('Profile Picture:', user.User_Pfp); // Log profile picture for debugging
+        //console.log('Profile Picture:', user.User_Pfp); // Log profile picture for debugging
+        
     } catch (error) {
         res.status(500).json({ message: 'Error fetching profile', error: error.message });
     }
@@ -351,6 +354,8 @@ app.get('/api/all-spots', async (req, res) => {
 // Fetch spot details
 app.get('/api/spot_details/:id', async (req, res) => {
     const spotId = req.params.id;
+    console.log("id = " + spotId);
+    console.log("----------------------------------------------------------------");
 
     try {
         // SQL query to get spot details, including bookings not cancelled
@@ -516,10 +521,10 @@ app.get('/api/spot-availability/:spotId', async (req, res) => {
 // Promo code and gift card check endpoint
 app.post('/api/check-promo-or-giftcard', async (req, res) => {
     const { code } = req.body;  // Either promoCode or giftCardCode from the client
-    console.log(code);
+    //console.log(code);
     try {
         // Log the incoming request
-        console.log(`Received request with code: ${code}`);
+        //console.log(`Received request with code: ${code}`);
 
         // Check if it's a promo code first
         let result = await db.getQuery(`
@@ -532,7 +537,7 @@ app.post('/api/check-promo-or-giftcard', async (req, res) => {
 
         if (result && result.length > 0) {
             const promo = result[0];
-            console.log(`Promo code ${code} is valid`);
+            //console.log(`Promo code ${code} is valid`);
 
             res.json({
                 type: "promotion",
@@ -578,7 +583,7 @@ app.post('/api/check-promo-or-giftcard', async (req, res) => {
                 type: "giftcard",
                 message: "Gift card valid",
                 giftCard: {
-                    id: giftCardPurchase.Gift_Card_Purchase_ID,
+                    id: 4,
                     name: giftCard.Gift_Card_Name,
                     type: "Fixed",
                     amount: giftCard.Gift_Card_Amount
@@ -588,7 +593,7 @@ app.post('/api/check-promo-or-giftcard', async (req, res) => {
         }
 
         // If neither promo code nor gift card code is valid
-        console.log(`Code ${code} is invalid or already used`);
+        //console.log(`Code ${code} is invalid or already used`);
 
         res.status(404).json({
             message: "Code not found or invalid"
@@ -645,7 +650,7 @@ app.post('/api/create-booking', authenticateToken, async (req, res) => {
         paymentId,
         promotionId
     } = req.body;
-
+    console.log(paymentId)
     try {
         // Use the date as it is, no conversion needed
         const startDateFormatted = startDate; // Assume the frontend sends the date in a consistent format (e.g., 'YYYY-MM-DD')
@@ -775,7 +780,6 @@ app.get('/api/amenities', async (req, res) => {
     }
 });
 
-// enpoint to get basic spot information based on category_ids.
 app.post('/api/spots-category', async (req, res) => {
     try {
         // Extract category IDs from the request body
@@ -788,6 +792,8 @@ app.post('/api/spots-category', async (req, res) => {
 
         // Convert categoryIds array to a comma-separated string for the SQL query
         const categoryIdsString = categoryIds.join(',');
+
+        console.log(`Category IDs received: ${categoryIdsString}`);
 
         // SQL query with dynamic WHERE clause for category filtering
         const sql = `
@@ -811,6 +817,8 @@ app.post('/api/spots-category', async (req, res) => {
 
         // Execute the query
         const results = await db.getQuery(sql);
+
+        console.log(`Number of spots found: ${results.length}`);
 
         if (!results || results.length === 0) {
             return res.status(404).json({ message: 'No spots found' });
@@ -853,6 +861,7 @@ app.post('/api/spots-category', async (req, res) => {
         });
     }
 });
+
 
 // endpoint to fetch owners
 app.get('/api/owners', async (req, res) => {
@@ -1040,9 +1049,9 @@ app.put("/api/update-spot/:spotId", authenticateToken, async (req, res) => {
 
     try {
         // Log the incoming data for debugging
-        console.log('Spot ID:', spotId);
-        console.log('User ID:', userId);
-        console.log('Request Body:', req.body);  // Log the entire request body
+        //console.log('Spot ID:', spotId);
+        //console.log('User ID:', userId);
+        //console.log('Request Body:', req.body);  // Log the entire request body
 
         // Get a connection from the pool
         connection = await db.pool.getConnection();
@@ -1133,7 +1142,7 @@ app.put("/api/update-spot/:spotId", authenticateToken, async (req, res) => {
         // 7. Update Spot Media
         await connection.query(`DELETE FROM Spot_Media WHERE Spot_ID = ?`, [spotId]);
         for (const url of imageUrls) {
-            console.log('Inserting image URL:', url);  // Log image URL
+            //console.log('Inserting image URL:', url);  // Log image URL
             const [mediaResult] = await connection.query(
                 `INSERT INTO Media (media_Type, Media_File_URL, Media_Description, Media_Upload_Time)
                  VALUES ('image', ?, NULL, NOW())`,
@@ -1241,6 +1250,7 @@ app.get('/api/streets', async (req, res) => {
 
 // Add Spot Endpoint
 app.post("/api/add-spot", authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
     const {
         name,
         description,
@@ -1268,10 +1278,6 @@ app.post("/api/add-spot", authenticateToken, async (req, res) => {
     let connection;
 
     try {
-        // Log the incoming data for debugging
-        console.log("Owner ID:", ownerId);
-        console.log("Request Body:", req.body);
-
         // Get a connection from the pool
         connection = await db.pool.getConnection();
         await connection.beginTransaction(); // Start a transaction
@@ -1355,11 +1361,23 @@ app.post("/api/add-spot", authenticateToken, async (req, res) => {
             );
         }
 
-        // 8. Insert Availability with corrected column names
+        // 8. Insert Availability
         const [availabilityResult] = await connection.query(
             `INSERT INTO Availability (Spot_ID, Availability_Start, Availability_Stop)
              VALUES (?, ?, ?)`,
             [spotId, startDate, endDate]
+        );
+
+        // 9. Insert Booking (with owner as the user, and fixed price and dates)
+        const bookingStartDate = '2000-01-01';
+        const bookingEndDate = '2000-01-01';
+        const bookingTotal = 0; // Set the price to 0
+        const bookingStatus = 'Confirmed'; // You can change this as per your business logic
+
+        await connection.query(
+            `INSERT INTO Booking (User_ID, Spot_ID, Booking_Start, Booking_End, Booking_Status, Booking_Total, Booking_Date)
+             VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+            [userId, spotId, bookingStartDate, bookingEndDate, bookingStatus, bookingTotal]
         );
 
         // Commit the transaction
@@ -1375,6 +1393,7 @@ app.post("/api/add-spot", authenticateToken, async (req, res) => {
         res.status(500).json({ error: `An error occurred while adding the spot: ${error.message}` });
     }
 });
+
 
 // endpoint to delete a spot.
 app.delete("/api/delete-spot", authenticateToken, async (req, res) => {
@@ -1437,14 +1456,14 @@ app.delete("/api/delete-spot", authenticateToken, async (req, res) => {
 });
 
 // Endpoint to get spots based on user's favorite Spot_IDs
-app.post('/api/spots-favorites', async (req, res) => {
+app.post('/api/spots-favorites', authenticateToken, async (req, res) => {
     try {
-        // Extract User_ID from the request body
-        const { userId } = req.body;
+        // Extract User_ID from the token
+        const userId = req.user.userId;
 
         // Validate User_ID
-        if (!userId) {
-            return res.status(400).json({ message: 'User ID is required.' });
+        if (!userId || typeof userId !== 'number') {
+            return res.status(400).json({ message: 'User ID is invalid.' });
         }
 
         // Fetch Spot_IDs from the favorite table
@@ -1534,6 +1553,7 @@ app.post('/api/spots-favorites', async (req, res) => {
         });
     }
 });
+
 
 // endpoint to fetch upcoming, past, and canceled bookings
 app.post('/api/bookings', authenticateToken, async (req, res) => {
@@ -1686,7 +1706,7 @@ app.post('/api/cancel-booking', authenticateToken, async (req, res) => {
         const booking = bookingResults[0];
 
         // Log the fetched booking details
-        console.log('Fetched Booking:', booking);
+        //console.log('Fetched Booking:', booking);
 
         // Step 2: Ensure the user is the owner of the booking
         if (booking.User_ID !== userId) {
@@ -1700,7 +1720,7 @@ app.post('/api/cancel-booking', authenticateToken, async (req, res) => {
 
         // Step 4: Calculate the refund (75% of Booking_Total)
         const refundAmount = (booking.Booking_Total * 0.75).toFixed(2);
-        console.log('Calculated Refund Amount:', refundAmount);
+        //console.log('Calculated Refund Amount:', refundAmount);
 
         // Step 5: Insert the cancellation record into the 'calcellation' table
         const cancellationSql = `
@@ -1709,11 +1729,11 @@ app.post('/api/cancel-booking', authenticateToken, async (req, res) => {
         `;
 
         // Log the cancellation data before inserting
-        console.log('Cancellation Data:', {
-            bookingId,
-            cancellationReason,
-            refundAmount
-        });
+        // console.log('Cancellation Data:', {
+        //     bookingId,
+        //     cancellationReason,
+        //     refundAmount
+        // });
 
         await db.getQuery(cancellationSql, [bookingId, cancellationReason, refundAmount]);
 
@@ -1736,8 +1756,8 @@ app.post('/api/cancel-booking', authenticateToken, async (req, res) => {
 app.post('/api/submit-review', authenticateToken, async (req, res) => {
     try {
         // Log the incoming data for debugging purposes
-        console.log('Request body:', req.body);
-        console.log('Uploaded file:', req.file); // If you're uploading a file
+        // console.log('Request body:', req.body);
+        // console.log('Uploaded file:', req.file); // If you're uploading a file
 
         const userId = req.user.userId;
         const { spotId, reviewRating, reviewComment } = req.body;
@@ -2405,8 +2425,8 @@ app.post('/api/create-gift-card-purchase', authenticateToken, async (req, res) =
         paymentId
     } = req.body;
 
-    console.log("card_ID = " + giftCardId);
-    console.log("Payment_ID = " + paymentId);
+    // console.log("card_ID = " + giftCardId);
+    // console.log("Payment_ID = " + paymentId);
 
     try {
         // Generate a unique Gift Card Purchase Code (e.g., a random 6-digit integer)
@@ -2485,6 +2505,66 @@ app.get('/api/promotions', async (req, res) => {
     } catch (error) {
         console.error('Error fetching promotions:', error);
         res.status(500).json({ message: 'Error fetching promotions', error: error.message });
+    }
+});
+
+// API Contact Types Endpoint
+app.get('/api/contact-types', async (req, res) => {
+    try {
+        // Query to fetch contact types from the Contact_Type table
+        const contactTypes = await db.getQuery('SELECT Contact_Type_Name, Contact_Type_ID FROM Contact_Type');
+        
+        // Filter out duplicate contact types based on Contact_Type_Name
+        const uniqueContactTypes = contactTypes.filter((value, index, self) => 
+            index === self.findIndex((t) => (
+                t.Contact_Type_Name === value.Contact_Type_Name
+            ))
+        );
+
+        res.json({
+            message: 'Contact types retrieved successfully',
+            contactTypes: uniqueContactTypes
+        });
+    } catch (error) {
+        console.error('Error fetching contact types:', error);
+        res.status(500).json({
+            message: 'Error fetching contact types',
+            error: error.message
+        });
+    }
+});
+
+// Create Contact Message
+app.post('/api/contact-message', authenticateToken, async (req, res) => {
+    const { contactTypeId, message } = req.body; // Get type ID and message from frontend
+    // console.log(contactTypeId);
+    // console.log(message);
+    try {
+        // SQL to insert the contact message
+        const contactMessageSql = `
+            INSERT INTO Contact
+                (User_ID, Contact_Type_ID, Contact_Message, Contact_Time) 
+            VALUES (?, ?, ?, NOW())
+        `;
+
+        // Execute the SQL query
+        const contactMessageResult = await db.getQuery(contactMessageSql, [
+            req.user.userId, // User_ID from authentication
+            contactTypeId,   // Contact_Type_ID from frontend
+            message          // Contact_Message from frontend
+        ]);
+
+        // Respond with success
+        res.json({ 
+            message: 'Contact message submitted successfully',
+            contactMessageId: contactMessageResult.insertId // Return the new message ID
+        });
+    } catch (error) {
+        console.error('Error creating contact message:', error);
+        res.status(500).json({ 
+            message: 'Error creating contact message',
+            error: error.message 
+        });
     }
 });
 
